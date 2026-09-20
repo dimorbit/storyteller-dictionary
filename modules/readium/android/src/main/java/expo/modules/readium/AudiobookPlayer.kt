@@ -1,0 +1,1511 @@
+@file:OptIn(InternalReadiumApi::class)
+
+package expo.modules.readium
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.PendingIntent.FLAG_IMMUTABLE
+import android.content.ComponentName
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
+import android.util.Log
+import androidx.annotation.RequiresApi
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.PlayerMessage
+import androidx.media3.session.MediaSession
+import expo.modules.kotlin.AppContext
+import expo.modules.kotlin.exception.Exceptions
+import kotlin.math.roundToLong
+import androidx.core.net.toUri
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.CommandButton
+import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaConstants
+import androidx.media3.session.MediaController
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionToken
+import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.guava.await
+import kotlinx.coroutines.guava.future
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONArray
+import org.json.JSONObject
+import org.readium.r2.shared.InternalReadiumApi
+import org.readium.r2.shared.extensions.toList
+import org.readium.r2.shared.extensions.toMap
+import org.readium.r2.shared.publication.Locator
+import org.readium.r2.shared.util.Url
+import org.readium.r2.shared.util.fromEpubHref
+import java.io.File
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
+
+data class Track(
+    val uri: Uri,
+    val bookUuid: String,
+    val title: String,
+    val duration: Double,
+    val bookTitle: String,
+    val author: String?,
+    val coverUri: Uri?,
+    val relativeUri: String,
+    val narrator: String?,
+    val mimeType: String
+) {
+    fun toJson(): Map<String, Any> {
+        return mapOf(
+            "bookUuid" to this.bookUuid,
+            "uri" to this.uri.toString(),
+            "title" to this.title,
+            "duration" to this.duration,
+            "bookTitle" to this.bookTitle,
+            "author" to this.author,
+            "coverUri" to this.coverUri.toString(),
+            "relativeUri" to this.relativeUri,
+            "narrator" to this.narrator,
+            "mimeType" to this.mimeType
+        ) as Map<String, Any>
+    }
+
+    companion object {
+        fun fromJson(json: Map<String, Any?>): Track {
+            return Track(
+                bookUuid = json["bookUuid"]?.let { it as? String }
+                    ?: throw Exception("Track missing required field: bookUuid"),
+                uri = (json["uri"]?.let { it as? String }
+                    ?: throw Exception("Track missing required field: uri")).toUri(),
+                title = json["title"]?.let { it as? String }
+                    ?: throw Exception("Track missing required field: title"),
+                duration = json["duration"]?.let { it as? Double }
+                    ?: throw Exception("Track missing required field: duration"),
+                bookTitle = json["bookTitle"]?.let { it as? String }
+                    ?: throw Exception("Track missing required field: bookTitle"),
+                author = json["author"]?.let { it as? String },
+                coverUri = (json["coverUri"]?.let { it as? String })?.toUri(),
+                relativeUri = json["relativeUri"]?.let { it as? String }
+                    ?: throw Exception("Track missing required field: relativeUri"),
+                narrator = json["narrator"]?.let { it as? String },
+                mimeType = json["mimeType"]?.let { it as? String }
+                    ?: throw Exception("Track missing required field: mimeType")
+            )
+        }
+
+        fun fromMediaItem(mediaItem: MediaItem): Track? {
+            return Track(
+                uri = mediaItem.localConfiguration?.uri ?: return null,
+                relativeUri = mediaItem.mediaId,
+                bookUuid = mediaItem.localConfiguration?.tag as? String ?: return null,
+                title = mediaItem.mediaMetadata.title?.toString() ?: return null,
+                bookTitle = mediaItem.mediaMetadata.albumTitle?.toString() ?: return null,
+                author = mediaItem.mediaMetadata.artist?.toString(),
+                narrator = mediaItem.mediaMetadata.composer?.toString(),
+                duration = mediaItem.mediaMetadata.durationMs?.toDouble() ?: return null,
+                mimeType = mediaItem.localConfiguration?.mimeType ?: return null,
+                coverUri = mediaItem.mediaMetadata.artworkUri
+            )
+        }
+    }
+}
+
+interface Listener : Player.Listener {
+    fun onClipChanged(overlayPar: OverlayPar, locator: Locator)
+    fun onPositionChanged(position: Double)
+    fun onSleepTimerExpired(deadline: Double)
+    fun onTrackChanged(track: Track, position: Double, index: Int)
+}
+
+val interruptionInterval = 5.minutes
+private const val SCHEDULED_CLIP_EVENT_IMMEDIATE_THRESHOLD_MS = 50L
+
+@androidx.annotation.OptIn(UnstableApi::class)
+class PlaybackService : MediaLibraryService() {
+    companion object {
+        const val ROOT_ID = "root"
+        const val HOME_ID = "home"
+        const val LIBRARY_ID = "library"
+
+        // mediaId format for playable book placeholders: "book:{uuid}:{format}"
+        const val BOOK_ID_PREFIX = "book:"
+
+        // Headless JS task that boots the Redux store and attaches it to this
+        // session. Must match ANDROID_AUTO_SESSION_TASK in androidAutoSessionTask.ts.
+        const val ANDROID_AUTO_SESSION_TASK = "StorytellerAndroidAutoSession"
+    }
+
+    private var mediaSession: MediaLibrarySession? = null
+    private var player: ExoPlayer? = null
+    private var mediaIdToClips = mapOf<String, List<OverlayPar>>()
+    private var clipEventMessage: PlayerMessage? = null
+
+    @Volatile
+    private var appControllerCount = 0
+
+    private val hasAppController: Boolean
+        get() = appControllerCount > 0
+
+    // Guards against launching the headless JS session more than once before its
+    // controller connects. Reset when the last app controller disconnects so a
+    // later Android Auto session can boot JS again.
+    @Volatile
+    private var headlessSessionRequested = false
+
+    private var root = MediaItem.Builder()
+        .setMediaId(ROOT_ID)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setIsBrowsable(true)
+                .setIsPlayable(false)
+                .setTitle("Storyteller")
+                .build()
+        )
+        .build()
+
+    private val dbHelper by lazy { StorytellerDatabaseHelper(this) }
+
+    // Set when onAddMediaItems resolves a book with a saved position; consumed
+    // by the STATE_READY listener in onCreate so the seek happens exactly once
+    // after ExoPlayer finishes preparing the new queue.
+    @Volatile
+    private var pendingSeekTrackIndex: Int = -1
+
+    @Volatile
+    private var pendingSeekMs: Long = 0L
+
+    // Track connected automotive controllers for URI permission granting
+    private val automotiveControllers = mutableSetOf<String>()
+
+    private fun grantCoverUriPermission(packageName: String, artworkUri: Uri) {
+        if (artworkUri.scheme != "content") return
+        try {
+            grantUriPermission(
+                packageName,
+                artworkUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            //
+        }
+    }
+
+    // Grant URI permission for current track's artwork to automotive controllers
+    private fun grantArtworkUriPermissions(artworkUri: Uri) {
+        if (automotiveControllers.isEmpty()) return
+        for (packageName in automotiveControllers) {
+            grantCoverUriPermission(packageName, artworkUri)
+        }
+    }
+
+    // Create your player and media session in the onCreate lifecycle event
+    @RequiresApi(Build.VERSION_CODES.O)
+    override fun onCreate() {
+        super.onCreate()
+        val player = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(), true
+            )
+            // Pause when headphones disconnected
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
+            .setSeekBackIncrementMs(15.seconds.inWholeMilliseconds)
+            .setSeekForwardIncrementMs(30.seconds.inWholeMilliseconds)
+            .setName("Storyteller")
+            .build()
+
+        // Consume Android Auto resume seeks once ExoPlayer has prepared the new
+        // queue. Doing this before STATE_READY risks the seek being overwritten
+        // by the timeline transition to track 0 at position 0.
+        player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState != Player.STATE_READY) return
+                val idx = pendingSeekTrackIndex
+                if (idx < 0) return
+                val ms = pendingSeekMs
+                pendingSeekTrackIndex = -1
+                pendingSeekMs = 0L
+                player.seekTo(idx, ms)
+            }
+        })
+
+        // When Android Auto starts playback and no JS context is attached, boot
+        // the headless JS session so the normal store/listeners take over progress
+        // persistence and sync. Once it attaches, hasAppController becomes true and
+        // this no-ops.
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) maybeStartAndroidAutoSession()
+            }
+        })
+
+        mediaSession =
+            with(
+                MediaLibrarySession.Builder(this, player, getCallback())
+            ) {
+                setId(packageName)
+                setMediaButtonPreferences(
+                    listOf(
+                        CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD)
+                            .setDisplayName("Seek forward")
+                            .setPlayerCommand(Player.COMMAND_SEEK_FORWARD)
+                            .setSlots(CommandButton.SLOT_FORWARD)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_SKIP_BACK)
+                            .setDisplayName("Seek back")
+                            .setPlayerCommand(Player.COMMAND_SEEK_BACK)
+                            .setSlots(CommandButton.SLOT_BACK)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_PREVIOUS)
+                            .setDisplayName("Skip to previous")
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS)
+                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_NEXT)
+                            .setDisplayName("Skip to next")
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT)
+                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .build(),
+                        // TODO: Add bookmark/highlight commands
+                    )
+                )
+                packageManager?.getLaunchIntentForPackage(packageName)?.let { sessionIntent ->
+                    sessionIntent.flags =
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    sessionIntent.data = "storyteller://notification.click".toUri()
+                    sessionIntent.action = Intent.ACTION_VIEW
+
+                    setSessionActivity(
+                        PendingIntent.getActivity(
+                            this@PlaybackService,
+                            0,
+                            sessionIntent,
+                            FLAG_IMMUTABLE
+                        )
+                    )
+                }
+                setMediaNotificationProvider(
+                    DefaultMediaNotificationProvider.Builder(
+                        this@PlaybackService
+                    ).build()
+                )
+                build()
+            }
+
+        this.player = player
+    }
+
+    // Boots the headless JS session for the currently-playing book if the app
+    // isn't already attached. The JS task imports the store and calls
+    // connectToActiveSession, which connects an app controller (incrementing
+    // appControllerCount) — so this only fires for sessions started outside the app.
+    private fun maybeStartAndroidAutoSession() {
+        if (hasAppController || headlessSessionRequested) return
+        val player = player ?: return
+        val item = player.currentMediaItem ?: return
+        val extras = item.mediaMetadata.extras ?: return
+        val bookUuid = extras.getString("bookUuid") ?: return
+        val format = extras.getString("format") ?: return
+
+        headlessSessionRequested = true
+        try {
+            HeadlessJsBridge.run(
+                this,
+                ANDROID_AUTO_SESSION_TASK,
+                Bundle().apply {
+                    putString("bookUuid", bookUuid)
+                    putString("format", format)
+                }
+            )
+        } catch (e: Exception) {
+            headlessSessionRequested = false
+            Log.w("StorytellerPlayback", "Failed to start Android Auto session task", e)
+        }
+    }
+
+    /** Called when swiping the activity away from recents. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // If the player is playing, trigger a pause so that the
+        // app will save the position
+        mediaSession?.run {
+            if (player.isPlaying) {
+                player.pause()
+            }
+        }
+        super.onTaskRemoved(rootIntent)
+
+        release()
+        stopSelf()
+    }
+
+    // Remember to release the player and media session in onDestroy
+    override fun onDestroy() {
+        super.onDestroy()
+        release()
+    }
+
+    private fun release() {
+        mediaSession?.run {
+            player.release()
+            release()
+            mediaSession = null
+        }
+    }
+
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
+        mediaSession
+
+    private fun sortClips(bookUuid: String) {
+        val clips = BookService.getOverlayClips(bookUuid)
+        setMediaIdToClips(clips)
+    }
+
+    private fun setMediaIdToClips(clips: List<OverlayPar>) {
+        val mediaIdToClipsMutable =
+            mutableMapOf<String, MutableList<OverlayPar>>().withDefault { mutableListOf() }
+        for (clip in clips) {
+            val trackClips = mediaIdToClipsMutable.getValue(clip.audioResource)
+            trackClips.add(clip)
+            mediaIdToClipsMutable[clip.audioResource] = trackClips
+        }
+        mediaIdToClips = mediaIdToClipsMutable
+    }
+
+    private fun seedReadaloudClips(bookUuid: String) {
+        val clips = dbHelper.getReadaloudClips(bookUuid)?.let { parseStoredClips(it) } ?: return
+        if (clips.isEmpty()) return
+
+        BookService.setClips(bookUuid, clips)
+        setMediaIdToClips(clips)
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun scheduleMessages(mediaItem: MediaItem, index: Int) {
+        val trackClips = mediaIdToClips[mediaItem.mediaId] ?: return
+
+        trackClips.forEach { clip ->
+            player?.createMessage { messageType, payload ->
+                // Send custom command to notify clients about clip change
+                val clip = payload as OverlayPar
+                notifyClipChanged(clip)
+            }?.apply {
+                setPosition(index, (clip.start * 1000).roundToLong())
+                setPayload(clip)
+                setDeleteAfterDelivery(false)
+                send()
+            }
+        }
+    }
+
+    private fun notifyClipChanged(clip: OverlayPar) {
+        mediaSession?.broadcastCustomCommand(
+            SessionCommand("CLIP_CHANGED", Bundle()),
+            Bundle().apply {
+                putString(
+                    "clip", JSONObject(
+                        mapOf(
+                            "audioResource" to clip.audioResource,
+                            "start" to clip.start,
+                            "end" to clip.end,
+                            "fragmentId" to clip.fragmentId,
+                            "textResource" to clip.textResource
+                        )
+                    ).toString()
+                )
+            }
+        )
+    }
+
+    private fun categoryItem(
+        id: String,
+        title: String,
+        childStyle: ChildStyle = ChildStyle.LIST,
+    ): MediaItem {
+        val extras = Bundle().apply {
+            val value = when (childStyle) {
+                ChildStyle.LIST -> MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+                ChildStyle.GRID -> MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            }
+            putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, value)
+            putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, value)
+        }
+        return MediaItem.Builder()
+            .setMediaId(id)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setIsBrowsable(true)
+                    .setIsPlayable(false)
+                    .setTitle(title)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                    .setExtras(extras)
+                    .build()
+            )
+            .build()
+    }
+
+    private enum class ChildStyle { LIST, GRID }
+
+    private fun bookCoverUri(bookUuid: String): Uri =
+        Uri.parse("content://${packageName}.autocover/$bookUuid")
+
+    private fun bookBrowseItem(entry: BookEntry, groupTitle: String? = null): MediaItem {
+        val extras = groupTitle?.let {
+            Bundle().apply { putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, it) }
+        }
+
+        val metadata = MediaMetadata.Builder()
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setTitle(entry.title)
+            .setAlbumTitle(entry.title)
+            .setArtworkUri(bookCoverUri(entry.uuid))
+            .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+            .apply {
+                entry.author?.let { setArtist(it) }
+                entry.author?.let { setSubtitle(it) }
+                extras?.let { setExtras(it) }
+            }
+            .build()
+        return MediaItem.Builder()
+            .setMediaId("$BOOK_ID_PREFIX${entry.uuid}:${entry.format}")
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    private fun buildBookItems(
+        browser: MediaSession.ControllerInfo,
+        entries: List<BookEntry>
+    ): List<MediaItem> = entries.map { entry ->
+        grantCoverUriPermission(browser.packageName, bookCoverUri(entry.uuid))
+        bookBrowseItem(entry)
+    }
+
+    // Expands the Android Auto book placeholders into real track queues.
+    private fun resolveMediaItems(
+        controller: MediaSession.ControllerInfo,
+        mediaItems: List<MediaItem>
+    ): List<MediaItem> {
+        val resolved = mutableListOf<MediaItem>()
+        var newSeek: Pair<Int, Long>? = null
+        for (item in mediaItems) {
+            if (!item.mediaId.startsWith(BOOK_ID_PREFIX)) {
+                resolved.add(item)
+                continue
+            }
+            val parts = item.mediaId.removePrefix(BOOK_ID_PREFIX).split(":", limit = 2)
+            if (parts.size != 2) continue
+            val (bookUuid, format) = parts
+            val entry = dbHelper.getBook(bookUuid, format) ?: continue
+
+            if (format == "readaloud") {
+                seedReadaloudClips(bookUuid)
+            }
+
+            val tracks = tracksFromManifest(entry)
+            if (tracks.isEmpty()) continue
+
+            grantCoverUriPermission(controller.packageName, bookCoverUri(bookUuid))
+
+            val locatorJson = dbHelper.getPositionLocator(bookUuid)
+            val manifestJson = entry.manifestJson
+            if (locatorJson != null && manifestJson != null) {
+                newSeek = resolvePositionMs(bookUuid, format, locatorJson, manifestJson, tracks)
+            }
+
+            resolved.addAll(tracks)
+        }
+        // Always publish the resolution outcome so a book without a saved
+        // position doesn't inherit the previous call's seek.
+        pendingSeekTrackIndex = newSeek?.first ?: -1
+        pendingSeekMs = newSeek?.second ?: 0L
+        return resolved
+    }
+
+    // Returns books from all Home sections as a single flat list, each tagged
+    // with its section's group title. Android Auto renders these as labeled
+    // horizontal shelves within the Home folder — matching Audible's layout.
+    // Each book appears in exactly one shelf, picking the highest-priority
+    // section it qualifies for.
+    private fun buildSectionedHome(browser: MediaSession.ControllerInfo): List<MediaItem> {
+        val sections = listOf(
+            "Currently Reading" to dbHelper.getCurrentlyReading(),
+            "Next Up" to dbHelper.getNextUp(),
+            "Start Reading" to dbHelper.getStartReading(),
+            "Recently Added" to dbHelper.getRecentlyAdded(),
+        )
+        val seen = mutableSetOf<String>()
+        val items = mutableListOf<MediaItem>()
+        for ((sectionTitle, entries) in sections) {
+            for (entry in entries) {
+                if (!seen.add(entry.uuid)) continue
+                grantCoverUriPermission(browser.packageName, bookCoverUri(entry.uuid))
+                items.add(bookBrowseItem(entry, groupTitle = sectionTitle))
+            }
+        }
+        return items
+    }
+
+    private fun tracksFromManifest(entry: BookEntry): List<MediaItem> {
+        val manifestText = entry.manifestJson ?: return emptyList()
+        val readingOrder = runCatching {
+            JSONObject(manifestText).optJSONArray("readingOrder") ?: JSONArray()
+        }.getOrElse { return emptyList() }
+
+        val extractedDir = File(filesDir, "books/extracted/${entry.uuid}/${entry.format}")
+        val total = readingOrder.length()
+        val tracks = mutableListOf<MediaItem>()
+        for (i in 0 until total) {
+            val resource = readingOrder.optJSONObject(i) ?: continue
+            val href = resource.optNonEmptyString("href") ?: continue
+            val mimeType = resource.optNonEmptyString("type")?.replace(Regex(";\\s*codecs=.*"), "")
+            val durationSeconds = resource.optDouble("duration", 0.0)
+            val title = resource.optNonEmptyString("title") ?: entry.title
+
+            val metadata = MediaMetadata.Builder()
+                .setTrackNumber(i + 1)
+                .setTotalTrackCount(total)
+                .setTitle(title)
+                .setAlbumTitle(entry.title)
+                .setArtworkUri(bookCoverUri(entry.uuid))
+                .setDurationMs((durationSeconds * 1000).roundToLong())
+                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK_CHAPTER)
+                .apply {
+                    entry.author?.let { setArtist(it) }
+                    setExtras(Bundle().apply {
+                        putString("bookUuid", entry.uuid)
+                        putString("format", entry.format)
+                    })
+                }
+                .build()
+
+            val fileUri = Uri.fromFile(File(extractedDir, href))
+            val item = MediaItem.Builder()
+                .setMediaId(href)
+                .setUri(fileUri)
+                .apply { mimeType?.let { setMimeType(it) } }
+                .setMediaMetadata(metadata)
+                .build()
+            tracks.add(item)
+        }
+        return tracks
+    }
+
+    // Mirrors getAudiobookClip() and getClip() in mobile/modules/readium/index.ts
+    // so an Auto resume lands in the same place the in-app player would.
+    private fun resolvePositionMs(
+        bookUuid: String,
+        format: String,
+        locatorJson: String,
+        manifestJson: String,
+        tracks: List<MediaItem>,
+    ): Pair<Int, Long>? {
+        val locatorJsonObj = runCatching { JSONObject(locatorJson) }.getOrNull() ?: return null
+        val href = locatorJsonObj.optNonEmptyString("href") ?: return null
+        val locations = locatorJsonObj.optJSONObject("locations")
+        val manifest = runCatching { JSONObject(manifestJson) }.getOrNull()
+        val readingOrder = manifest?.optJSONArray("readingOrder")
+
+        val trackIndex = tracks.indexOfFirst { it.mediaId == href }
+
+        if (trackIndex >= 0) {
+            locations?.optJSONArray("fragments")?.let { fragments ->
+                for (j in 0 until fragments.length()) {
+                    val f = fragments.optString(j)
+                    if (f.startsWith("t=")) {
+                        val seconds = f.removePrefix("t=").toDoubleOrNull() ?: continue
+                        return trackIndex to (seconds * 1000).roundToLong()
+                    }
+                }
+            }
+
+            val progression = locations?.optDoubleOrNull("progression")
+            if (progression != null && readingOrder != null) {
+                val trackDuration =
+                    readingOrder.optJSONObject(trackIndex)?.optDouble("duration", 0.0) ?: 0.0
+                if (trackDuration > 0) {
+                    return trackIndex to (progression * trackDuration * 1000).roundToLong()
+                }
+            }
+        } else if (format == "readaloud") {
+            val locator = Locator.fromJSON(locatorJsonObj)
+            val clipsJson = dbHelper.getReadaloudClips(bookUuid)
+            if (locator != null && clipsJson != null) {
+                parseStoredClips(clipsJson)?.let { BookService.setClips(bookUuid, it) }
+                val clip = runCatching { BookService.getClip(bookUuid, locator) }.getOrNull()
+                if (clip != null) {
+                    val idx = tracks.indexOfFirst { it.mediaId == clip.audioResource }
+                    if (idx >= 0) return idx to (clip.start * 1000).roundToLong()
+                }
+            }
+        }
+
+        val totalProgression = locations?.optDoubleOrNull("totalProgression")
+        if (totalProgression != null && readingOrder != null) {
+            var totalDuration = 0.0
+            val durations = DoubleArray(readingOrder.length())
+            for (j in 0 until readingOrder.length()) {
+                val d = readingOrder.optJSONObject(j)?.optDouble("duration", 0.0) ?: 0.0
+                durations[j] = d
+                totalDuration += d
+            }
+            if (totalDuration <= 0) return null
+            var offset = totalDuration * totalProgression
+            for (j in durations.indices) {
+                if (offset < durations[j]) {
+                    return j to (offset * 1000).roundToLong()
+                }
+                offset -= durations[j]
+            }
+            // offset fell off the end — clamp to the last track's end.
+            val last = durations.size - 1
+            return last to (durations[last] * 1000).roundToLong()
+        }
+
+        return null
+    }
+
+    private fun JSONObject.optDoubleOrNull(key: String): Double? =
+        if (has(key) && !isNull(key)) optDouble(key, Double.NaN).takeIf { !it.isNaN() } else null
+
+    private fun JSONObject.optNonEmptyString(key: String): String? =
+        if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotEmpty() } else null
+
+    private fun parseStoredClips(json: String): List<OverlayPar>? =
+        runCatching {
+            val arr = JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.toMap()?.let { OverlayPar.fromJson(it) }
+            }
+        }.getOrNull()
+
+    private fun getCallback(): MediaLibrarySession.Callback {
+        return object : MediaLibrarySession.Callback {
+            override fun onGetLibraryRoot(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                params: LibraryParams?
+            ): ListenableFuture<LibraryResult<MediaItem>> {
+                return Futures.immediateFuture(LibraryResult.ofItem(root, params))
+            }
+
+            override fun onGetChildren(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                parentId: String,
+                page: Int,
+                pageSize: Int,
+                params: LibraryParams?
+            ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                val items: List<MediaItem> = when (parentId) {
+                    ROOT_ID -> listOf(
+                        categoryItem(HOME_ID, "Home", ChildStyle.GRID),
+                        categoryItem(LIBRARY_ID, "Library", ChildStyle.GRID),
+                    )
+
+                    HOME_ID -> buildSectionedHome(browser)
+                    LIBRARY_ID -> buildBookItems(browser, dbHelper.getDownloads())
+                    else -> emptyList()
+                }
+                return Futures.immediateFuture(
+                    LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
+                )
+            }
+
+            override fun onSetMediaItems(
+                mediaSession: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                mediaItems: List<MediaItem>,
+                startIndex: Int,
+                startPositionMs: Long
+            ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+                val resolved = resolveMediaItems(controller, mediaItems)
+                if (resolved.isEmpty()) {
+                    return Futures.immediateFailedFuture(
+                        UnsupportedOperationException("No playable items")
+                    )
+                }
+                val seek = pendingSeekTrackIndex.takeIf { it >= 0 }
+                val startIdx = seek ?: C.INDEX_UNSET
+                val startPos = if (seek != null) pendingSeekMs else C.TIME_UNSET
+                return Futures.immediateFuture(
+                    MediaSession.MediaItemsWithStartPosition(resolved, startIdx, startPos)
+                )
+            }
+
+            override fun onAddMediaItems(
+                mediaSession: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                mediaItems: List<MediaItem>
+            ): ListenableFuture<List<MediaItem>> {
+                val resolved = resolveMediaItems(controller, mediaItems)
+                if (resolved.isEmpty()) {
+                    return Futures.immediateFailedFuture(
+                        UnsupportedOperationException("No playable items")
+                    )
+                }
+                return Futures.immediateFuture(resolved)
+            }
+
+            override fun onCustomCommand(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                customCommand: SessionCommand,
+                args: Bundle
+            ): ListenableFuture<SessionResult> {
+                val result = Futures.immediateFuture(
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                )
+                when (customCommand.customAction) {
+                    "TRACK_LOAD_STARTED" -> {
+                        val trackCount = args.getInt("trackCount")
+                        val bookUuid = args.getString("bookUuid") ?: return result
+
+                        if (session.player.mediaItemCount == trackCount && trackCount > 0) {
+                            sortClips(bookUuid)
+                            for (i in 0..session.player.mediaItemCount - 1) {
+                                val mediaItem = session.player.getMediaItemAt(i)
+
+                                scheduleMessages(mediaItem, i)
+                            }
+                        } else {
+                            session.player.addListener(object : Player.Listener {
+                                override fun onTimelineChanged(
+                                    timeline: Timeline,
+                                    reason: Int
+                                ) {
+                                    if (session.player.mediaItemCount != trackCount || trackCount == 0) return
+
+                                    session.player.removeListener(this)
+                                    sortClips(bookUuid)
+                                    for (i in 0..session.player.mediaItemCount - 1) {
+                                        val mediaItem = session.player.getMediaItemAt(i)
+
+                                        scheduleMessages(mediaItem, i)
+                                        grantArtworkUriPermissions(
+                                            mediaItem.mediaMetadata.artworkUri ?: continue
+                                        )
+                                    }
+                                }
+                            })
+                        }
+                    }
+
+                    "SCHEDULE_CLIP_EVENT" -> {
+                        clipEventMessage?.cancel()
+
+                        val fragmentId = args.getString("fragmentId") ?: return result
+                        val fragmentProgress = args.getDouble("fragmentProgress")
+                        val sessionPlayer = session.player
+                        val mediaItemIndex = sessionPlayer.currentMediaItemIndex
+                        val mediaId = sessionPlayer.currentMediaItem?.mediaId ?: return result
+                        val clips = mediaIdToClips[mediaId] ?: return result
+                        val clip = clips.find { it.fragmentId == fragmentId } ?: return result
+
+                        val positionMs =
+                            ((clip.start + fragmentProgress * (clip.end - clip.start)) * 1000).roundToLong()
+
+                        if (sessionPlayer.currentPosition >= positionMs - SCHEDULED_CLIP_EVENT_IMMEDIATE_THRESHOLD_MS) {
+                            session.broadcastCustomCommand(
+                                SessionCommand("CLIP_EVENT_FIRED", Bundle.EMPTY),
+                                Bundle.EMPTY
+                            )
+                            clipEventMessage = null
+                            return result
+                        }
+
+                        clipEventMessage = player?.createMessage { _, _ ->
+                            session.broadcastCustomCommand(
+                                SessionCommand("CLIP_EVENT_FIRED", Bundle.EMPTY),
+                                Bundle.EMPTY
+                            )
+                            clipEventMessage = null
+                        }?.apply {
+                            setPosition(mediaItemIndex, positionMs)
+                            setDeleteAfterDelivery(true)
+                            send()
+                        }
+                    }
+
+                    "CANCEL_CLIP_EVENT" -> {
+                        clipEventMessage?.cancel()
+                        clipEventMessage = null
+                    }
+                }
+
+                return result
+            }
+
+            override fun onConnect(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo
+            ): MediaSession.ConnectionResult {
+                if (controller.packageName == this@PlaybackService.packageName &&
+                    !session.isMediaNotificationController(controller)
+                ) {
+                    appControllerCount++
+                }
+
+                val isAutomotiveController = session.isAutomotiveController(controller)
+                val isAutoCompanionController =
+                    session.isAutoCompanionController(controller)
+
+                if (isAutomotiveController || isAutoCompanionController) {
+                    automotiveControllers.add(controller.packageName)
+                    val artworkUri = player?.currentMediaItem?.mediaMetadata?.artworkUri
+                    if (artworkUri != null) {
+                        grantArtworkUriPermissions(artworkUri)
+                    }
+                }
+
+                val availableSessionCommands =
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
+                        .add(SessionCommand("TRACK_LOAD_STARTED", Bundle.EMPTY))
+                        .add(SessionCommand("SCHEDULE_CLIP_EVENT", Bundle.EMPTY))
+                        .add(SessionCommand("CANCEL_CLIP_EVENT", Bundle.EMPTY))
+                        .build()
+
+                val availablePlayerCommands =
+                    MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
+                        .add(Player.COMMAND_SEEK_BACK)
+                        .add(Player.COMMAND_SEEK_FORWARD)
+                        .add(Player.COMMAND_SEEK_TO_NEXT)
+                        .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                        .build()
+
+                return MediaSession.ConnectionResult.accept(
+                    availableSessionCommands,
+                    availablePlayerCommands
+                )
+            }
+
+            override fun onDisconnected(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo
+            ) {
+                if (controller.packageName == this@PlaybackService.packageName &&
+                    !session.isMediaNotificationController(controller)
+                ) {
+                    appControllerCount = (appControllerCount - 1).coerceAtLeast(0)
+                    // Allow a future Auto session to boot JS again once the app
+                    // (or a previous headless session) has fully detached.
+                    if (appControllerCount == 0) {
+                        headlessSessionRequested = false
+                    }
+                }
+                automotiveControllers.remove(controller.packageName)
+                super.onDisconnected(session, controller)
+            }
+
+            override fun onMediaButtonEvent(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                intent: Intent,
+            ): Boolean {
+                val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                    ?: return false
+
+                if (event.action != KeyEvent.ACTION_DOWN) return false
+
+                return when (event.keyCode) {
+                    // AVRCP "next/previous" mappings from Bluetooth headsets.
+                    KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                        session.player.seekForward()
+                        true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                        session.player.seekBack()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTime::class)
+class AudiobookPlayer(
+    val appContext: AppContext,
+    val listener: Listener
+) : Player.Listener, MediaController.Listener {
+    var bookUuid: String? = null
+    var controller: MediaController? = null
+    var relativeUriToIndex: Map<String, Int> = mapOf()
+    var relativeUriToClips: Map<String, List<OverlayPar>> = mapOf()
+    var audioProgressCollector: Job? = null
+    private var clipEventHandler: (() -> Unit)? = null
+    private val sleepTimerHandler = Handler(Looper.getMainLooper())
+    private val sleepTimerGeneration = AtomicLong()
+    private var sleepTimerDeadline: Long? = null
+    private var sleepTimerRunnable: Runnable? = null
+
+    private var automaticRewind = false
+    private var afterInterruptionRewind = 0.0
+    private var afterBreakRewind = 0.0
+    private var lastPaused: Instant? = null
+
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    suspend fun loadTracks(tracks: List<Track>) {
+        val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+        val sessionToken =
+            SessionToken(context, ComponentName(context, PlaybackService::class.java))
+
+        unload()
+
+        val controllerFuture =
+            MediaController.Builder(context, sessionToken).setListener(this).buildAsync()
+
+        controllerFuture.addListener(
+            {
+                val controller = controllerFuture.get()
+                this.controller = controller
+
+                controller.addListener(listener)
+                controller.addListener(this@AudiobookPlayer)
+
+                val firstTrack = tracks.firstOrNull() ?: return@addListener
+                val bookUuid = firstTrack.bookUuid
+                this.bookUuid = bookUuid
+
+                controller.sendCustomCommand(
+                    SessionCommand("TRACK_LOAD_STARTED", Bundle.EMPTY),
+                    Bundle().apply {
+                        putInt("trackCount", tracks.size)
+                        putString("bookUuid", bookUuid)
+                    }
+                )
+
+                val clips = BookService.getOverlayClips(bookUuid)
+
+                val relativeUriToClipsMutable =
+                    mutableMapOf<String, MutableList<OverlayPar>>().withDefault { mutableListOf() }
+                for (clip in clips) {
+                    val trackClips = relativeUriToClipsMutable.getValue(clip.audioResource)
+                    trackClips.add(clip)
+                    relativeUriToClipsMutable[clip.audioResource] = trackClips
+                }
+                relativeUriToClips = relativeUriToClipsMutable
+
+                val relativeUriToIndexMutable = mutableMapOf<String, Int>()
+                tracks.forEachIndexed { index, track ->
+                    val metadata = MediaMetadata.Builder().apply {
+                        setTrackNumber(index + 1)
+                        setTotalTrackCount(tracks.size)
+                        setArtworkUri(track.coverUri)
+                        setArtist(track.author)
+                        setComposer(track.narrator)
+                        setAlbumTitle(track.bookTitle)
+                        setDurationMs(track.duration.roundToLong())
+                        setTitle(track.title)
+                        setExtras(Bundle().apply { putString("bookUuid", bookUuid) })
+                    }.build()
+
+                    val mediaItem =
+                        MediaItem.Builder().apply {
+                            setMediaId(track.relativeUri)
+                            setUri(track.uri)
+                            setMimeType(track.mimeType)
+                            setMediaMetadata(metadata)
+                        }.build()
+
+                    controller.addMediaItem(mediaItem)
+                    relativeUriToIndexMutable[track.relativeUri] = index
+                }
+                relativeUriToIndex = relativeUriToIndexMutable
+
+                controller.prepare()
+            },
+            MoreExecutors.directExecutor()
+        )
+
+        controllerFuture.await()
+
+        listener.onTrackChanged(
+            getCurrentTrack() ?: return,
+            getPosition(),
+            controller?.currentMediaItemIndex ?: 0
+        )
+    }
+
+    // Attaches a controller to a session that is already playing (e.g. one
+    // started from Android Auto) without re-queueing or seeking, so that the
+    // native -> JS event pipeline starts emitting for it. The passed tracks are
+    // used only to identify the book and seed lookups; the queue and playback
+    // position are left untouched.
+    @androidx.annotation.OptIn(UnstableApi::class)
+    suspend fun connectToActiveSession(tracks: List<Track>) {
+        val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+
+        // Already attached (e.g. the app connected first) — nothing to do.
+        if (controller != null) return
+
+        val sessionToken =
+            SessionToken(context, ComponentName(context, PlaybackService::class.java))
+
+        val controllerFuture =
+            MediaController.Builder(context, sessionToken).setListener(this).buildAsync()
+
+        controllerFuture.addListener(
+            {
+                val controller = controllerFuture.get()
+                this.controller = controller
+
+                controller.addListener(listener)
+                controller.addListener(this@AudiobookPlayer)
+
+                val bookUuid =
+                    tracks.firstOrNull()?.bookUuid
+                        ?: controller.currentMediaItem
+                            ?.let { getTrackFromMediaItem(it) }
+                            ?.bookUuid
+                this.bookUuid = bookUuid
+
+                if (bookUuid != null) {
+                    val clips = BookService.getOverlayClips(bookUuid)
+                    val relativeUriToClipsMutable =
+                        mutableMapOf<String, MutableList<OverlayPar>>().withDefault { mutableListOf() }
+                    for (clip in clips) {
+                        val trackClips = relativeUriToClipsMutable.getValue(clip.audioResource)
+                        trackClips.add(clip)
+                        relativeUriToClipsMutable[clip.audioResource] = trackClips
+                    }
+                    relativeUriToClips = relativeUriToClipsMutable
+                }
+
+                // Build the relativeUri -> index map from the queue the session
+                // is already playing; never add or seek media items here.
+                val relativeUriToIndexMutable = mutableMapOf<String, Int>()
+                for (i in 0 until controller.mediaItemCount) {
+                    relativeUriToIndexMutable[controller.getMediaItemAt(i).mediaId] = i
+                }
+                relativeUriToIndex = relativeUriToIndexMutable
+            },
+            MoreExecutors.directExecutor()
+        )
+
+        controllerFuture.await()
+
+        // Catch JS up to the session's current state. onIsPlayingChanged here is
+        // the listener (ReadiumModule) callback, not our Player.Listener override,
+        // so it only forwards state to JS without starting the progress collector.
+        getCurrentTrack()?.let { track ->
+            listener.onTrackChanged(track, getPosition(), getCurrentTrackIndex())
+        }
+        listener.onIsPlayingChanged(getIsPlaying())
+    }
+
+    fun getIsPlaying(): Boolean {
+        val player = controller ?: return false
+        return player.isPlaying
+    }
+
+    fun getPosition(): Double {
+        val player = controller ?: return 0.0
+        return player.currentPosition / 1000.0
+    }
+
+    fun getCurrentClip(): OverlayPar? {
+        val track = getCurrentTrack() ?: return null
+        val trackClips = relativeUriToClips[track.relativeUri] ?: return null
+        return searchForClip(trackClips, getPosition())
+    }
+
+    fun getCurrentTrack(): Track? {
+        val player = controller ?: return null
+        val mediaItem = player.currentMediaItem ?: return null
+        return getTrackFromMediaItem(mediaItem)
+    }
+
+    fun getCurrentTrackIndex(): Int {
+        return controller?.currentMediaItemIndex ?: 0
+    }
+
+    private fun getTrackFromMediaItem(item: MediaItem): Track? {
+        return Track(
+            uri = item.localConfiguration?.uri ?: return null,
+            relativeUri = item.mediaId,
+            bookUuid = item.mediaMetadata.extras?.getString("bookUuid") ?: return null,
+            title = item.mediaMetadata.title?.toString() ?: return null,
+            bookTitle = item.mediaMetadata.albumTitle?.toString() ?: return null,
+            author = item.mediaMetadata.artist?.toString(),
+            narrator = item.mediaMetadata.composer?.toString(),
+            duration = item.mediaMetadata.durationMs?.toDouble() ?: return null,
+            mimeType = item.localConfiguration?.mimeType ?: return null,
+            coverUri = item.mediaMetadata.artworkUri
+        )
+    }
+
+    fun getTracks(): List<Track> {
+        val player = controller ?: return listOf()
+        val tracks = mutableListOf<Track>()
+        val count = player.mediaItemCount
+        for (i in 0..count - 1) {
+            val mediaItem = player.getMediaItemAt(i)
+            val track = Track.fromMediaItem(mediaItem) ?: continue
+            tracks.add(track)
+        }
+        return tracks
+    }
+
+    private fun emitClipChange(relativeUri: String, positionSeconds: Double) {
+        val trackClips = relativeUriToClips[relativeUri] ?: return
+        val bookUuid = bookUuid ?: return
+        val currentClip = searchForClip(trackClips, positionSeconds)
+        if (currentClip != null) {
+            serviceScope.launch {
+                listener.onClipChanged(
+                    currentClip, BookService.buildFragmentLocator(
+                        bookUuid,
+                        Url.fromEpubHref(currentClip.textResource)!!,
+                        currentClip.fragmentId
+                    )
+                )
+            }
+        }
+    }
+
+    fun play(automaticRewind: Boolean = true) {
+        val player = controller ?: return
+        if (automaticRewind && this.automaticRewind) {
+            if (lastPaused?.let { it + interruptionInterval > Clock.System.now() } ?: false) {
+                seekBy(-afterInterruptionRewind, true)
+            } else {
+                seekBy(-afterBreakRewind, true)
+            }
+        }
+        player.play()
+
+        val currentTrack = getCurrentTrack() ?: return
+        val position = getPosition()
+
+        emitClipChange(currentTrack.relativeUri, position)
+    }
+
+    fun pause() {
+        val player = controller ?: return
+        player.pause()
+    }
+
+    fun setSleepTimer(deadline: Double?) {
+        val generation = sleepTimerGeneration.incrementAndGet()
+        val deadlineMs = deadline?.roundToLong()
+        sleepTimerHandler.post {
+            sleepTimerRunnable?.let(sleepTimerHandler::removeCallbacks)
+            sleepTimerRunnable = null
+            sleepTimerDeadline = deadlineMs
+            if (deadlineMs == null) return@post
+
+            val runnable = object : Runnable {
+                override fun run() {
+                    if (
+                        sleepTimerGeneration.get() != generation ||
+                        sleepTimerDeadline != deadlineMs
+                    ) return
+
+                    val remaining = deadlineMs - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        sleepTimerHandler.postDelayed(this, remaining)
+                        return
+                    }
+
+                    sleepTimerDeadline = null
+                    sleepTimerRunnable = null
+
+                    val player = controller
+                    if (player == null) {
+                        listener.onSleepTimerExpired(deadlineMs.toDouble())
+                        return
+                    }
+
+                    Handler(player.applicationLooper).post {
+                        if (sleepTimerGeneration.get() != generation) return@post
+
+                        player.pause()
+                        listener.onSleepTimerExpired(deadlineMs.toDouble())
+                    }
+                }
+            }
+
+            sleepTimerRunnable = runnable
+            sleepTimerHandler.postDelayed(
+                runnable,
+                (deadlineMs - System.currentTimeMillis()).coerceAtLeast(0)
+            )
+        }
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    fun seekBy(amount: Double, bounded: Boolean = false) {
+        val player = controller ?: return
+
+        val endPosition = getPosition() + amount
+        val currentTrack = getCurrentTrack() ?: return
+
+        if (endPosition < 0.0) {
+            if (player.currentMediaItemIndex == 0 || bounded) {
+                player.seekTo(0)
+            } else {
+                val seekToIndex = player.currentMediaItemIndex - 1
+                val seekToItem = player.getMediaItemAt(seekToIndex)
+                val seekToTrack = getTrackFromMediaItem(seekToItem) ?: return
+                player.seekTo(
+                    seekToIndex,
+                    ((seekToTrack.duration + endPosition) * 1000).roundToLong()
+                )
+            }
+        } else if (endPosition >= currentTrack.duration) {
+            if (player.currentMediaItemIndex == player.mediaItemCount - 1 || bounded) {
+                player.seekTo((currentTrack.duration * 1000).roundToLong())
+            } else {
+                player.seekTo(
+                    player.currentMediaItemIndex + 1,
+                    ((endPosition - currentTrack.duration) * 1000).roundToLong()
+                )
+            }
+        } else {
+            player.seekTo((endPosition * 1000).roundToLong())
+
+            onPositionChanged(endPosition)
+        }
+
+        val track = getCurrentTrack() ?: return
+        val position = getPosition()
+
+        emitClipChange(track.relativeUri, position)
+    }
+
+    fun seekTo(relativeUri: String, position: Double, skipEmit: Boolean?) {
+        val player = controller ?: return
+        val currentTrack = getCurrentTrack()
+        val index = relativeUriToIndex[relativeUri] ?: return
+        player.seekTo(index, (position * 1000).roundToLong())
+
+        if (currentTrack?.relativeUri.toString() == relativeUri) {
+            onPositionChanged(position)
+        }
+
+        if (!(skipEmit ?: false)) {
+            emitClipChange(relativeUri, position)
+        }
+    }
+
+    fun skip(position: Double) {
+        val player = controller ?: return
+        player.seekTo((position * 1000).roundToLong())
+
+        val currentTrack = getCurrentTrack() ?: return
+
+        emitClipChange(currentTrack.relativeUri, position)
+    }
+
+    fun next() {
+        val player = controller ?: return
+        player.seekToNextMediaItem()
+
+        val currentTrack = getCurrentTrack() ?: return
+        val position = getPosition()
+
+        emitClipChange(currentTrack.relativeUri, position)
+    }
+
+    fun prev() {
+        val player = controller ?: return
+        player.seekToPrevious()
+
+        val currentTrack = getCurrentTrack() ?: return
+        val position = getPosition()
+
+        emitClipChange(currentTrack.relativeUri, position)
+    }
+
+    fun setRate(rate: Double) {
+        val player = controller ?: return
+        player.setPlaybackSpeed(rate.toFloat())
+    }
+
+    fun setAutomaticRewind(enabled: Boolean, afterInterruption: Double, afterBreak: Double) {
+        this.automaticRewind = enabled
+        this.afterInterruptionRewind = afterInterruption
+        this.afterBreakRewind = afterBreak
+    }
+
+    fun unload() {
+        audioProgressCollector?.cancel()
+        audioProgressCollector = null
+        controller?.run {
+            removeMediaItems(0, mediaItemCount)
+            release()
+        }
+        controller = null
+        bookUuid = null
+        relativeUriToClips = mapOf()
+        relativeUriToIndex = mapOf()
+    }
+
+
+    fun onPositionChanged(position: Double) {
+        listener.onPositionChanged(position)
+    }
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        listener.onTrackChanged(
+            getCurrentTrack() ?: return,
+            getPosition(),
+            controller?.currentMediaItemIndex ?: 0
+        )
+    }
+
+    override fun onIsPlayingChanged(isPlaying: Boolean) {
+        val player = controller ?: return
+
+        if (isPlaying) {
+            audioProgressCollector = appContext.backgroundCoroutineScope.launch {
+                audioProgress(player).collect {
+                    listener.onPositionChanged(it / 1000.0)
+                }
+            }
+        } else {
+            audioProgressCollector?.cancel()
+            audioProgressCollector = null
+
+            lastPaused = Clock.System.now()
+        }
+    }
+
+    override fun onCustomCommand(
+        controller: MediaController,
+        command: SessionCommand,
+        args: Bundle
+    ): ListenableFuture<SessionResult> {
+        val result = Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+
+        when (command.customAction) {
+            "CLIP_CHANGED" -> {
+                if (!controller.isPlaying) return result
+
+                return serviceScope.future {
+                    val result = SessionResult(SessionResult.RESULT_SUCCESS)
+                    val bookUuid = bookUuid ?: return@future result
+
+                    val clipData = args.getString("clip") ?: return@future result
+                    val clipMap = JSONObject(clipData).toMap()
+                    val clip = OverlayPar(
+                        clipMap["audioResource"] as String,
+                        clipMap["fragmentId"] as String,
+                        clipMap["textResource"] as String,
+                        clipMap["start"] as? Double ?: (clipMap["start"] as Int).toDouble(),
+                        clipMap["end"] as? Double ?: (clipMap["end"] as Int).toDouble(),
+                    )
+                    listener.onClipChanged(
+                        clip, BookService.buildFragmentLocator(
+                            bookUuid,
+                            Url.fromEpubHref(clipMap["textResource"] as String)!!,
+                            clipMap["fragmentId"] as String
+                        )
+                    )
+                    result
+                }
+            }
+
+            "CLIP_EVENT_FIRED" -> {
+                clipEventHandler?.invoke()
+                clipEventHandler = null
+            }
+        }
+
+        return result
+    }
+
+
+    fun scheduleClipEvent(fragmentId: String, fragmentProgress: Double, handler: () -> Unit) {
+        clipEventHandler = handler
+
+        val ctrl = controller ?: return
+        Handler(ctrl.applicationLooper).post {
+            ctrl.sendCustomCommand(
+                SessionCommand("SCHEDULE_CLIP_EVENT", Bundle.EMPTY),
+                Bundle().apply {
+                    putString("fragmentId", fragmentId)
+                    putDouble("fragmentProgress", fragmentProgress)
+                }
+            )
+        }
+    }
+
+    fun cancelScheduledClipEvent() {
+        clipEventHandler = null
+
+        val ctrl = controller ?: return
+        Handler(ctrl.applicationLooper).post {
+            ctrl.sendCustomCommand(
+                SessionCommand("CANCEL_CLIP_EVENT", Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        }
+    }
+
+    private fun audioProgress(player: Player) = flow {
+        while (true) {
+            val position = suspendCancellableCoroutine<Long> { continuation ->
+                Handler(player.applicationLooper).post {
+                    continuation.resume(player.currentPosition) { cause, _, _ -> }
+                }
+            }
+            emit(position)
+            // TODO: divide by playback speed
+            delay(1000)
+        }
+    }
+}
+
+fun searchForClip(clips: List<OverlayPar>, position: Double): OverlayPar? {
+    var startIndex = 0
+    var endIndex = clips.size - 1
+    while (startIndex <= endIndex) {
+        val midIndex = (startIndex + endIndex) / 2
+        val midItem = clips[midIndex]
+        if (position < midItem.start) {
+            endIndex = midIndex - 1
+            continue
+        }
+        if (position >= midItem.end) {
+            startIndex = midIndex + 1
+            continue
+        }
+        return midItem
+    }
+    return null
+}

@@ -1,0 +1,89 @@
+{
+  "cli": {
+    "version": ">= 3.13.2",
+    "promptToConfigurePushNotifications": false,
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "android": {
+        "config": "android-build.yml",
+        "resourceClass": "large"
+      },
+      "ios": {
+        "config": "ios-build.yml"
+      },
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "development"
+      }
+    },
+    "preview": {
+      "android": {
+        "config": "android-build-preview.yml",
+        "resourceClass": "large"
+      },
+      "ios": {
+        "config": "ios-build.yml"
+      },
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview"
+      }
+    },
+    "preview-sentry": {
+      "android": {
+        "config": "android-build-preview.yml",
+        "resourceClass": "large"
+      },
+      "ios": {
+        "config": "ios-build.yml"
+      },
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview",
+        "EXPO_PUBLIC_ENABLE_SENTRY": "true"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "config": "android-build.yml",
+        "resourceClass": "large"
+      },
+      "ios": {
+        "config": "ios-build.yml"
+      },
+      "env": {
+        "APP_VARIANT": "production"
+      }
+    },
+    "production-sentry": {
+      "autoIncrement": true,
+      "android": {
+        "config": "android-build.yml",
+        "resourceClass": "large"
+      },
+      "ios": {
+        "config": "ios-build.yml"
+      },
+      "env": {
+        "APP_VARIANT": "production",
+        "EXPO_PUBLIC_ENABLE_SENTRY": "true"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6474467720"
+      }
+    },
+    "production-sentry": {
+      "ios": {
+        "ascAppId": "6474467720"
+      }
+    }
+  }
+}

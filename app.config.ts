@@ -1,0 +1,247 @@
+import { type ConfigContext, type ExpoConfig } from "expo/config"
+import "tsx/cjs"
+
+import packageInfo from "./package.json"
+
+const IS_DEV = process.env["APP_VARIANT"] === "development"
+
+export default ({ config }: ConfigContext): ExpoConfig => {
+  return {
+    ...config,
+    owner: "storyteller-platform",
+    name: IS_DEV ? "Storyteller (dev)" : "Storyteller",
+    slug: "storyteller",
+    version: packageInfo.version,
+    icon: "./assets/Storyteller_Logo.png",
+    userInterfaceStyle: "automatic",
+    scheme: "storyteller",
+    experiments: {
+      reactCompiler: true,
+    },
+    plugins: [
+      "expo-background-task",
+      "expo-status-bar",
+      [
+        "expo-camera",
+        {
+          cameraPermission:
+            "Allow Storyteller to use the camera to scan QR codes for device sign-in.",
+        },
+      ],
+      "expo-image",
+      "expo-sharing",
+      "expo-web-browser",
+      "expo-router",
+      [
+        "expo-secure-store",
+        {
+          faceIDPermission:
+            "Storyteller uses Face ID to unlock your securely stored sign-in credentials.",
+        },
+      ],
+      [
+        "expo-build-properties",
+        {
+          ios: {
+            deploymentTarget: "16.4",
+            extraPods: [
+              { name: "Minizip", modular_headers: true },
+              { name: "ZIPFoundation", version: "~> 0.9" },
+              {
+                name: "ReadiumShared",
+                version: "~> 3.6.0",
+                source: "https://github.com/readium/podspecs",
+              },
+              {
+                name: "ReadiumStreamer",
+                version: "~> 3.6.0",
+                source: "https://github.com/readium/podspecs",
+              },
+              {
+                name: "ReadiumNavigator",
+                version: "~> 3.6.0",
+                source: "https://github.com/readium/podspecs",
+              },
+              {
+                name: "ReadiumOPDS",
+                version: "~> 3.6.0",
+                source: "https://github.com/readium/podspecs",
+              },
+              {
+                name: "ReadiumLCP",
+                version: "~> 3.6.0",
+                source: "https://github.com/readium/podspecs",
+              },
+              {
+                name: "ReadiumAdapterGCDWebServer",
+                version: "~> 3.6.0",
+                source: "https://github.com/readium/podspecs",
+                modular_headers: true,
+              },
+              { name: "ReadiumGCDWebServer", modular_headers: true },
+            ],
+          },
+          android: {
+            compileSdkVersion: 36,
+            targetSdkVersion: 36,
+            buildToolsVersion: "36.0.0",
+            usesCleartextTraffic: true,
+          },
+        },
+      ],
+      [
+        "expo-font",
+        {
+          fonts: [
+            "./assets/fonts/YoungSerif.ttf",
+            "./assets/fonts/OpenDyslexic-Regular.otf",
+            "./assets/fonts/OpenDyslexic-Bold.otf",
+            "./assets/fonts/OpenDyslexic-Bold-Italic.otf",
+            "./assets/fonts/OpenDyslexic-Italic.otf",
+            "./node_modules/@expo-google-fonts/literata/Literata_500Medium.ttf",
+          ],
+        },
+      ],
+      [
+        "expo-document-picker",
+        {
+          iCloudContainerEnvironment: IS_DEV ? "Development" : "Production",
+        },
+      ],
+      [
+        "expo-splash-screen",
+        {
+          image: "./assets/Storyteller_Logo.png",
+          resizeMode: "contain",
+          imageWidth: 300,
+          backgroundColor: "#ffffff",
+          dark: {
+            image: "./assets/Storyteller_Logo.png",
+            imageWidth: 300,
+            backgroundColor: "#000000",
+            resizeMode: "contain",
+          },
+        },
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          enforceContrast: false,
+        },
+      ],
+      ["./plugins/withAndroidJetifier.ts"],
+      ["./plugins/withKeyDownEvents.ts", { keyCodes: [92, 93, 117] }],
+      ["./plugins/withCoreLibraryDesugaring.ts"],
+      ["./plugins/withAndroidAuto.ts"],
+      ["./plugins/withForegroundService.ts"],
+      [
+        "expo-network-security-config",
+        {
+          networkSecurityConfig: "./assets/configs/network_security_config.xml",
+          enable: true,
+        },
+      ],
+      ["./plugins/withNoParcelSizeCrashes.ts"],
+      // NOTE: Sentry is _only_ enabled for debug builds used to track down
+      // specific crash errors. It is _not_ included in the public Storyteller
+      // releases (either in the app stores or on GitLab's release page).
+      ...(process.env["ENABLE_SENTRY"]
+        ? [
+            [
+              "@sentry/react-native/expo",
+              {
+                url: "https://sentry.io/",
+                project: "storyteller-mobile",
+                organization: "storyteller-po",
+              },
+            ] as [string, unknown],
+          ]
+        : []),
+    ],
+    runtimeVersion: {
+      policy: "appVersion",
+    },
+    assetBundlePatterns: ["**/*"],
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: IS_DEV
+        ? "dev.smoores.Storyteller.dev"
+        : "dev.smoores.Storyteller",
+      config: {
+        usesNonExemptEncryption: false,
+      },
+      icon: "./assets/storyteller-ios.icon",
+      infoPlist: {
+        UISupportsDocumentBrowser: true,
+        UIFileSharingEnabled: true,
+        LSSupportsOpeningDocumentsInPlace: true,
+        UIBackgroundModes: ["audio", "processing"],
+        NSCameraUsageDescription:
+          "Allow Storyteller to use the camera to scan QR codes for device sign-in.",
+        NSMicrophoneUsageDescription:
+          "Storyteller only uses the camera to scan QR codes for device sign-in, but the camera component can also capture video with sound, which requires microphone access. Storyteller never records audio.",
+        NSLocalNetworkUsageDescription:
+          "Storyteller connects to your self-hosted Storyteller server over your local network to browse, stream, and download your books.",
+        CFBundleDocumentTypes: [
+          {
+            CFBundleTypeName: "EPUB",
+            LSItemContentTypes: ["org.idpf.epub-container"],
+            LSHandlerRank: "Owner",
+          },
+        ],
+      },
+    },
+    android: {
+      package: IS_DEV
+        ? "dev.smoores.Storyteller.dev"
+        : "dev.smoores.Storyteller",
+      adaptiveIcon: {
+        foregroundImage: "./assets/Storyteller_Logo.png",
+        backgroundColor: "#ffffff",
+      },
+      permissions: [
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+      ],
+      // This doesn't work yet
+      predictiveBackGestureEnabled: false,
+      intentFilters: [
+        {
+          action: "VIEW",
+          data: [
+            {
+              mimeType: "application/epub+zip",
+              scheme: "content",
+            },
+            {
+              mimeType: "application/epub+zip",
+              scheme: "file",
+            },
+          ],
+          category: ["BROWSABLE", "DEFAULT"],
+        },
+        {
+          action: "VIEW",
+          data: [
+            {
+              mimeType: "*/*",
+              pathPattern: ".*\\.epub",
+              scheme: "content",
+            },
+            {
+              mimeType: "*/*",
+              pathPattern: ".*\\.epub",
+              scheme: "file",
+            },
+          ],
+          category: ["BROWSABLE", "DEFAULT"],
+        },
+      ],
+    },
+    extra: {
+      eas: {
+        projectId: "3cc95011-19af-4637-a666-e1bec160c0f8",
+      },
+    },
+  }
+}
