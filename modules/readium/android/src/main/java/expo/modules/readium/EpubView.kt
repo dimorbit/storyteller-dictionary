@@ -609,6 +609,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         )
         val layoutBehavior = layoutBehavior(finalProps)
 
+        if (finalProps.bookUuid != oldProps?.bookUuid) {
+            dictionaryOccurrenceCache.clear()
+        }
+
         if (
             finalProps.bookUuid != oldProps?.bookUuid ||
             customFontsChanged
@@ -1231,8 +1235,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun decorateDictionaryEntries() {
-        val wash = dictionaryWash()
-        val tint = props!!.foreground
+        val props = props ?: return
+        val wash = dictionaryWash(props.background)
+        val tint = props.foreground
         val currentHref = navigator?.currentLocator?.value?.href
         val occurrences = dictionaryOccurrences.filter { it.locator.href == currentHref }
         val searchedUuids = occurrences.map { it.uuid }.toSet()
@@ -1254,9 +1259,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // books can share a chapter href, and the stored position would then land
         // in the wrong place. It is painted only when the search found nothing for
         // that word in this chapter.
-        val fromSavedLocator = props!!.dictionaryEntries
+        val fromSavedLocator = props.dictionaryEntries
             .filter { entry ->
-                entry.bookUuid == props!!.bookUuid &&
+                entry.bookUuid == props.bookUuid &&
                     entry.locator.href == currentHref &&
                     entry.id !in searchedUuids
             }
@@ -1310,8 +1315,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     // Matches the light blue the reader already paints over a text selection, so a
     // tapped word looks selected rather than specially coloured.
-    private fun dictionaryWash(): Int {
-        val background = props!!.background
+    private fun dictionaryWash(background: Int): Int {
         val luminance =
             (Color.red(background) + Color.green(background) + Color.blue(background)) / 3
         return if (luminance < 128) {

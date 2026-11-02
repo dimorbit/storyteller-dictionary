@@ -135,27 +135,24 @@ export function Epub({ book, format, locator }: Props) {
     return byKey
   }, [dictionaryEntries])
 
+  // The saved word a selection's text names. Used only when a selection or a
+  // highlight opens the menu; a tapped mark carries its own id instead.
+  const savedWordUuidForText = (text: string | null | undefined) => {
+    if (!text) return null
+    return dictionaryEntriesByKey.get(wordKey(text))?.uuid ?? null
+  }
+
+  // The saved word the open menu acts on. It is set when the menu
+  // opens and is never looked up again from the text afterwards.
   const activeDictionaryEntry = useMemo(() => {
-    if (activeDictionaryEntryUuid) {
-      return (
-        dictionaryEntries?.find(
-          (entry) => entry.uuid === activeDictionaryEntryUuid,
-        ) ?? null
-      )
-    }
+    if (!activeDictionaryEntryUuid) return null
 
-    if (!selection) return null
-
-    const selectedText = selection.locator.text?.highlight
-    if (!selectedText) return null
-
-    return dictionaryEntriesByKey.get(wordKey(selectedText)) ?? null
-  }, [
-    activeDictionaryEntryUuid,
-    dictionaryEntries,
-    dictionaryEntriesByKey,
-    selection,
-  ])
+    return (
+      dictionaryEntries?.find(
+        (entry) => entry.uuid === activeDictionaryEntryUuid,
+      ) ?? null
+    )
+  }, [activeDictionaryEntryUuid, dictionaryEntries])
 
   const handleDictionaryEntryDeleted = useCallback((entry: DictionaryEntry) => {
     setWashDecorationId(null)
@@ -325,7 +322,9 @@ export function Epub({ book, format, locator }: Props) {
             uri: getCustomFontUrl(font.filename),
           }))}
           onHighlightTap={(event) => {
-            setActiveDictionaryEntryUuid(null)
+            setActiveDictionaryEntryUuid(
+              savedWordUuidForText(locator.text?.highlight),
+            )
             setWashDecorationId(null)
             setSelection({
               x: event.nativeEvent.x,
@@ -380,12 +379,9 @@ export function Epub({ book, format, locator }: Props) {
               setWashDecorationId(null)
             } else {
               setSelection(event.nativeEvent)
-              const selectedText =
-                event.nativeEvent.locator.text?.highlight ?? ""
-              const matchingEntry = selectedText
-                ? (dictionaryEntriesByKey.get(wordKey(selectedText)) ?? null)
-                : null
-              setActiveDictionaryEntryUuid(matchingEntry?.uuid ?? null)
+              setActiveDictionaryEntryUuid(
+                savedWordUuidForText(event.nativeEvent.locator.text?.highlight),
+              )
             }
           }}
           onDictionaryTap={(event) => {
