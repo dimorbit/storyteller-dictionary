@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+
+# Expo / Metro output
+.expo/
+dist/
+web-build/
+.build/
+.metro-health-check*
+
+# Android build output and tooling caches
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/.kotlin/
+android/local.properties
+android/app/src/main/java/inline/
+*.hprof
+*.iml
+
+# Built app packages and JS bundles
+*.apk
+*.aab
+*.jsbundle
+
+# Signing material
+*.keystore
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+credentials.json
+
+# Local databases and app data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.orig.*
+
+# iOS project is not part of this Android build copy
+/ios

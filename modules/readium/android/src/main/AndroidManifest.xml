@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <application>
+        <provider
+            android:name="expo.modules.readium.AudioCoverProvider"
+            android:authorities="${applicationId}.autocover"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <service
+            android:name="expo.modules.readium.HeadlessJsTaskRunnerService"
+            android:exported="false" />
+    </application>
+</manifest>

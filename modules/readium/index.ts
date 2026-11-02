@@ -1,0 +1,255 @@
+import { type BookWithRelations } from "@/database/books"
+import { type BookAuthor } from "@/legacy/persistence/books"
+import { type UUID } from "@/uuid"
+
+import {
+  type EPUBViewProps,
+  type EPUBViewRef,
+  type ReadiumClip,
+  type ReadiumContributor,
+  type ReadiumLink,
+  type ReadiumLocalizedString,
+  type ReadiumLocator,
+  type ReadiumManifest,
+  type ReadiumTextFragment,
+} from "./src/Readium.types"
+import ReadiumModule from "./src/ReadiumModule"
+export { default as ReadiumView } from "./src/ReadiumView"
+export {
+  AUDIOBOOK_TOC_LOOKAHEAD_SECONDS,
+  buildAudiobookLocator,
+  getAudiobookLocatorDetails,
+  getAudiobookLocatorPosition,
+  getAudiobookTocItemAtPosition,
+} from "./audiobook"
+import EPUBView from "./src/ReadiumView"
+
+export async function extractArchive(archiveUrl: string, extractedUrl: string) {
+  await ReadiumModule.extractArchive(archiveUrl, extractedUrl)
+}
+
+export async function openPublication(
+  bookUuid: UUID,
+  expandedBookUri: string,
+  clips?: ReadiumClip[],
+): Promise<ReadiumManifest> {
+  const manifest = await ReadiumModule.openPublication(
+    bookUuid,
+    expandedBookUri,
+    clips,
+  )
+  return typeof manifest === "string" ? JSON.parse(manifest) : manifest
+}
+
+export async function buildAudiobookManifest(
+  bookUuid: UUID,
+): Promise<ReadiumManifest> {
+  return await ReadiumModule.buildAudiobookManifest(bookUuid)
+}
+
+const linkLocatorCache = new Map<UUID, Map<string, ReadiumLocator>>()
+
+export async function locateLink(
+  bookUuid: UUID,
+  link: ReadiumLink,
+): Promise<ReadiumLocator> {
+  const cached = linkLocatorCache.get(bookUuid)?.get(link.href)
+  if (cached) return cached
+  const locator = await ReadiumModule.locateLink(bookUuid, link)
+  if (!linkLocatorCache.has(bookUuid)) linkLocatorCache.set(bookUuid, new Map())
+  linkLocatorCache.get(bookUuid)!.set(link.href, locator)
+  return locator
+}
+
+export async function getPositions(bookUuid: UUID): Promise<ReadiumLocator[]> {
+  const positions = await ReadiumModule.getPositions(bookUuid)
+  return positions
+}
+
+export async function getResource(
+  bookUuid: UUID,
+  link: ReadiumLink,
+): Promise<string> {
+  const resource = await ReadiumModule.getResource(bookUuid, link)
+  return resource
+}
+
+function getAudiobookClip(book: BookWithRelations, locator: ReadiumLocator) {
+  const audiobook = book.audiobook
+  if (!audiobook) return null
+
+  const timeFragment = locator.locations?.fragments
+    ?.find((f) => f.startsWith("t="))
+    ?.replace("t=", "")
+  if (timeFragment !== undefined) {
+    return {
+      relativeUrl: locator.href,
+      start: parseFloat(timeFragment),
+    }
+  }
+
+  const progression = locator.locations?.progression
+  if (progression !== undefined) {
+    const manifest = audiobook.manifest
+    if (!manifest) return null
+
+    const duration = manifest.readingOrder.find(
+      (resource) => resource.href === locator.href,
+    )?.duration
+    if (duration !== undefined) {
+      return {
+        relativeUrl: locator.href,
+        start: progression * duration,
+      }
+    }
+  }
+
+  const totalProgression = locator.locations?.totalProgression
+  if (totalProgression === undefined) return null
+
+  const manifest = audiobook.manifest
+  if (!manifest) return null
+
+  let totalDuration = 0
+  for (const resource of manifest.readingOrder) {
+    totalDuration += resource.duration ?? 0
+  }
+  const totalStart = totalDuration * totalProgression
+
+  let count = 0
+  for (const resource of manifest.readingOrder) {
+    if (count + (resource.duration ?? 0) >= totalStart) {
+      return {
+        relativeUrl: resource.href,
+        start: totalStart - count,
+      }
+    }
+    count += resource.duration ?? 0
+  }
+
+  return null
+}
+
+function getReadaloudLocatorFromAudiobook(
+  positions: ReadiumLocator[] | null,
+  locator: ReadiumLocator,
+) {
+  const totalProgression = locator.locations?.totalProgression
+  if (totalProgression === undefined) return null
+
+  if (!positions?.[0]) return null
+
+  let position = positions[0]
+  for (const p of positions) {
+    if ((p.locations?.totalProgression ?? 0) > totalProgression) {
+      position = p
+      break
+    }
+  }
+
+  return position
+}
+
+export async function getClip(
+  book: BookWithRelations,
+  format: "audiobook" | "ebook" | "readaloud",
+  locator: ReadiumLocator,
+  positions: ReadiumLocator[] | null,
+): Promise<{ relativeUrl: string; start: number } | null> {
+  if (format === "audiobook") {
+    return getAudiobookClip(book, locator)
+  }
+
+  try {
+    const clip = await ReadiumModule.getClip(book.uuid, locator)
+    return clip
+  } catch {
+    const readaloudLocator = getReadaloudLocatorFromAudiobook(
+      positions,
+      locator,
+    )
+    if (!readaloudLocator) return null
+
+    try {
+      return await ReadiumModule.getClip(book.uuid, readaloudLocator)
+    } catch {
+      return null
+    }
+  }
+}
+
+export async function getFragment(
+  bookUuid: UUID,
+  clipUrl: string,
+  position: number,
+): Promise<ReadiumTextFragment | null> {
+  const fragment = await ReadiumModule.getFragment(bookUuid, clipUrl, position)
+  return fragment
+}
+
+export async function getNextFragment(
+  bookUuid: UUID,
+  locator: ReadiumLocator,
+): Promise<ReadiumTextFragment | null> {
+  return ReadiumModule.getNextFragment(bookUuid, locator)
+}
+
+export async function getPreviousFragment(
+  bookUuid: UUID,
+  locator: ReadiumLocator,
+): Promise<ReadiumTextFragment | null> {
+  return ReadiumModule.getPreviousFragment(bookUuid, locator)
+}
+
+export function areLocatorsEqual(a: ReadiumLocator, b: ReadiumLocator) {
+  if (a.href !== b.href) return false
+  if (a.locations?.progression !== b.locations?.progression) return false
+  if ((a.text || b.text) && a.text?.highlight !== b.text?.highlight)
+    return false
+
+  return true
+}
+
+export function parseLocalizedString(
+  localizedString: ReadiumLocalizedString | null | undefined,
+  locale = "en-US",
+): string {
+  if (typeof localizedString === "string") {
+    return localizedString
+  }
+
+  if (!localizedString) {
+    return ""
+  }
+
+  return localizedString[locale] ?? Object.values(localizedString)[0] ?? ""
+}
+
+export function readiumToStorytellerAuthors(
+  author: ReadiumContributor[] | ReadiumContributor | undefined,
+) {
+  if (!author) return []
+
+  const authors = Array.isArray(author) ? author : [author]
+
+  return authors.map<BookAuthor>((a) => {
+    if (typeof a === "string") {
+      return {
+        name: parseLocalizedString(a),
+        file_as: a,
+        role: null,
+      }
+    }
+    const name = parseLocalizedString(a.name)
+
+    return {
+      name,
+      file_as: parseLocalizedString(a.sortAs) || name,
+      role: Array.isArray(a.role) ? a.role.join(", ") : (a.role ?? null),
+    }
+  })
+}
+
+export type { EPUBViewProps, EPUBViewRef, ReadiumManifest }
+export { EPUBView }
+export { ReadiumModule as Storyteller }
