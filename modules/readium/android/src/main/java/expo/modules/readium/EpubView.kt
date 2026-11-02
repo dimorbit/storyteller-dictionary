@@ -136,6 +136,23 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // Runs of whitespace in a quote become one space before two quotes are
         // compared, so the web view's snippet and the chapter text agree.
         private val whitespaceRun = Regex("\\s+")
+
+        // Readium's group.add does not check for an id the group already holds. A page
+        // that finishes loading while a diff is being worked out gets the whole list,
+        // and the diff then adds the same marks again, so each id is cut back to one.
+        private const val removeDuplicateDictionaryMarks = """
+            (function () {
+              var group = readium.getDecorations('dictionary');
+              var counts = {};
+              group.items.forEach(function (item) {
+                var id = item.decoration.id;
+                counts[id] = (counts[id] || 0) + 1;
+              });
+              Object.keys(counts).forEach(function (id) {
+                for (var i = 1; i < counts[id]; i++) group.remove(id);
+              });
+            })();
+        """
     }
 
     // Required for proper layout! Forces Expo to
@@ -1356,6 +1373,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     }
                     navigator?.applyDecorations(dictionaryDecorations, group = "dictionary")
                     delay(DICTIONARY_DECORATION_GAP_MS)
+                }
+                // The marks are drawn on the next animation frame, so this runs after the
+                // gap above has let them land. It is not awaited: the reader holds the call
+                // until its page has loaded, and the painter must not wait on that.
+                activity.lifecycleScope.launch {
+                    navigator?.evaluateJavascript(removeDuplicateDictionaryMarks)
                 }
             } while (dictionaryDecorationPending)
         }

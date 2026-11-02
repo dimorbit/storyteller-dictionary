@@ -44,6 +44,8 @@ import { useAvailableFormats } from "@/hooks/useAvailableFormats"
 import { useColorTheme } from "@/hooks/useColorTheme"
 import { useDownloadedFormats } from "@/hooks/useDownloadedFormats"
 import { useListAllServerBooks } from "@/hooks/useListAllServerBooks"
+import { bookmarkPressed } from "@/store/actions"
+import { useAppDispatch } from "@/store/appState"
 import {
   useCancelDownloadMutation,
   useDeleteBookMutation,
@@ -71,6 +73,7 @@ export default function BookDetailsScreen() {
 
   const [updateStatus] = useUpdateStatusMutation()
   const [updatePosition] = useUpdatePositionMutation()
+  const dispatch = useAppDispatch()
 
   const { data: savedWords } = useGetBookDictionaryEntriesQuery({
     bookUuid: uuid,
@@ -87,15 +90,21 @@ export default function BookDetailsScreen() {
 
   const downloadedFormats = useDownloadedFormats(book)
 
+  // The reader needs a downloaded text format. Readaloud is preferred, as it is on
+  // the book cover.
   const readerFormat = downloadedFormats.includes("readaloud")
     ? "readaloud"
-    : "ebook"
+    : downloadedFormats.includes("ebook")
+      ? "ebook"
+      : null
 
   // Jumping to a saved word means moving the book's saved place to where the word
   // was saved and then opening the reader, which starts from that place.
   const openSavedWord = async (entry: DictionaryEntry) => {
+    if (!readerFormat) return
+
     await updatePosition({
-      bookUuid: book.uuid,
+      bookUuid: uuid,
       locator: entry.locator,
       timestamp: Date.now(),
     })
@@ -104,9 +113,19 @@ export default function BookDetailsScreen() {
         // Opening the reader at the old place still beats not opening it.
       })
 
+    // The bookmark jump also moves a readaloud session that is already loaded for
+    // this book, which the saved place alone does not.
+    dispatch(
+      bookmarkPressed({
+        bookUuid: uuid,
+        locator: entry.locator,
+        timestamp: Date.now(),
+      }),
+    )
+
     router.push({
       pathname: "/read/[uuid]",
-      params: { uuid: book.uuid, format: readerFormat },
+      params: { uuid, format: readerFormat },
     })
   }
 
@@ -579,6 +598,7 @@ export default function BookDetailsScreen() {
                       key={entry.uuid}
                       accessibilityLabel={`Open saved word ${entry.word}`}
                       variant="link"
+                      disabled={!readerFormat}
                       className="h-auto flex-row items-center justify-start px-0 py-1"
                       onPress={() => {
                         void openSavedWord(entry)

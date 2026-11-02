@@ -189,11 +189,25 @@ export function Epub({ book, format, locator }: Props) {
 
   const epubViewRef = useRef<EPUBViewRef | null>(null)
 
+  // The selection menu can close after the reader has gone, when a save or delete
+  // it started finishes late. The native view is torn down by then.
+  const isMountedRef = useRef(false)
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
   // The selection menu draws a backdrop over the reader, so the tap that dismisses
   // it never reaches the webview and the native text selection (box plus handles)
   // would otherwise stay behind. Ask the webview to collapse it explicitly.
   const clearNativeSelection = useCallback(() => {
-    void epubViewRef.current?.clearSelection()
+    if (!isMountedRef.current) return
+
+    void epubViewRef.current?.clearSelection().catch(() => {
+      // The view is going away, so there is no selection left to clear.
+    })
   }, [])
 
   const isPlaying = useAppSelector(getIsPlaying)
