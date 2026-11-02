@@ -408,7 +408,10 @@ export const localApi = createApi({
       },
       providesTags: ["DictionaryEntries"],
     }),
-    getBookDictionaryEntries: build.query<DictionaryEntry[], { bookUuid: UUID }>({
+    getBookDictionaryEntries: build.query<
+      DictionaryEntry[],
+      { bookUuid: UUID }
+    >({
       async queryFn({ bookUuid }) {
         return { data: await getBookDictionaryEntries(bookUuid) }
       },
@@ -643,7 +646,6 @@ export const {
   useUpdateBookPreferenceMutation,
   useUpdateGlobalPreferenceMutation,
   useUpdateHighlightMutation,
-  useUpdatePositionMutation,
   useUpdateStatusMutation,
 } = localApi
 

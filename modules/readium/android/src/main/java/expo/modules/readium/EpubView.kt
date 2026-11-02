@@ -876,14 +876,19 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // Belt and braces: some layouts (scroll mode) run the selection inside a
         // different frame than the one the navigator command targets.
         activity?.lifecycleScope?.launch {
-            navigator.evaluateJavascript(
-                """
-                (function() {
-                  const selection = window.getSelection();
-                  if (selection) selection.removeAllRanges();
-                })();
-                """.trimIndent()
-            )
+            try {
+                navigator.evaluateJavascript(
+                    """
+                    (function() {
+                      const selection = window.getSelection();
+                      if (selection) selection.removeAllRanges();
+                    })();
+                    """.trimIndent()
+                )
+            } catch (e: Exception) {
+                // The webview can be torn down while the reader is closing.
+                Log.w("StorytellerSelection", "Could not clear the page selection", e)
+            }
         }
     }
 
@@ -1790,6 +1795,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     override fun onPageLoaded() {
         injectCustomFonts()
+
+        // Readium re-adds a chapter's marks when its page loads, which can double a paint
+        // that was already in flight. Repainting from empty leaves one copy of each mark.
+        decoratedDictionaryHref = null
+        decorateDictionaryEntries()
 
         if (!firstPageLoaded.isCompleted) {
             firstPageLoaded.complete(Unit)

@@ -193,7 +193,9 @@ export function Epub({ book, format, locator }: Props) {
   // it never reaches the webview and the native text selection (box plus handles)
   // would otherwise stay behind. Ask the webview to collapse it explicitly.
   const clearNativeSelection = useCallback(() => {
-    void epubViewRef.current?.clearSelection()
+    epubViewRef.current?.clearSelection().catch(() => {
+      // The webview can be gone already when the menu closes as the reader is left.
+    })
   }, [])
 
   const isPlaying = useAppSelector(getIsPlaying)

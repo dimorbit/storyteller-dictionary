@@ -44,6 +44,8 @@ import { useAvailableFormats } from "@/hooks/useAvailableFormats"
 import { useColorTheme } from "@/hooks/useColorTheme"
 import { useDownloadedFormats } from "@/hooks/useDownloadedFormats"
 import { useListAllServerBooks } from "@/hooks/useListAllServerBooks"
+import { navItemPressed } from "@/store/actions"
+import { useAppDispatch } from "@/store/appState"
 import {
   useCancelDownloadMutation,
   useDeleteBookMutation,
@@ -51,7 +53,6 @@ import {
   useGetBookDictionaryEntriesQuery,
   useGetBookQuery,
   useListStatusesQuery,
-  useUpdatePositionMutation,
   useUpdateStatusMutation,
 } from "@/store/localApi"
 import { useLazyGetBookQuery as useLazyGetServerBookQuery } from "@/store/serverApi"
@@ -70,7 +71,7 @@ export default function BookDetailsScreen() {
   const { data: statuses } = useListStatusesQuery()
 
   const [updateStatus] = useUpdateStatusMutation()
-  const [updatePosition] = useUpdatePositionMutation()
+  const dispatch = useAppDispatch()
 
   const { data: savedWords } = useGetBookDictionaryEntriesQuery({
     bookUuid: uuid,
@@ -87,26 +88,30 @@ export default function BookDetailsScreen() {
 
   const downloadedFormats = useDownloadedFormats(book)
 
+  // Saved words open in the reader, which needs a text format. Read-aloud wins when
+  // both are downloaded, as it does for the Read button.
   const readerFormat = downloadedFormats.includes("readaloud")
     ? "readaloud"
-    : "ebook"
+    : downloadedFormats.includes("ebook")
+      ? "ebook"
+      : null
 
-  // Jumping to a saved word means moving the book's saved place to where the word
-  // was saved and then opening the reader, which starts from that place.
-  const openSavedWord = async (entry: DictionaryEntry) => {
-    await updatePosition({
-      bookUuid: book.uuid,
-      locator: entry.locator,
-      timestamp: Date.now(),
-    })
-      .unwrap()
-      .catch(() => {
-        // Opening the reader at the old place still beats not opening it.
-      })
+  // Dispatching the reader's jump action saves the place and also moves a read-aloud
+  // session that is already loaded, which a plain position write would leave behind.
+  const openSavedWord = (entry: DictionaryEntry) => {
+    if (!readerFormat) return
+
+    dispatch(
+      navItemPressed({
+        bookUuid: uuid,
+        locator: entry.locator,
+        timestamp: Date.now(),
+      }),
+    )
 
     router.push({
       pathname: "/read/[uuid]",
-      params: { uuid: book.uuid, format: readerFormat },
+      params: { uuid, format: readerFormat },
     })
   }
 
@@ -580,8 +585,9 @@ export default function BookDetailsScreen() {
                       accessibilityLabel={`Open saved word ${entry.word}`}
                       variant="link"
                       className="h-auto flex-row items-center justify-start px-0 py-1"
+                      disabled={!readerFormat}
                       onPress={() => {
-                        void openSavedWord(entry)
+                        openSavedWord(entry)
                       }}
                     >
                       <Text className="text-primary">{entry.word}</Text>
