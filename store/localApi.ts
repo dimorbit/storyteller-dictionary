@@ -643,6 +643,7 @@ export const {
   useUpdateBookPreferenceMutation,
   useUpdateGlobalPreferenceMutation,
   useUpdateHighlightMutation,
+  useUpdatePositionMutation,
   useUpdateStatusMutation,
 } = localApi
 

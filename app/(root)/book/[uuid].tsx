@@ -1,5 +1,6 @@
 import { Link, useLocalSearchParams, useRouter } from "expo-router"
 import {
+  BookMarked,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -38,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Text } from "@/components/ui/text"
+import { type DictionaryEntry } from "@/database/dictionary"
 import { useAvailableFormats } from "@/hooks/useAvailableFormats"
 import { useColorTheme } from "@/hooks/useColorTheme"
 import { useDownloadedFormats } from "@/hooks/useDownloadedFormats"
@@ -46,8 +48,10 @@ import {
   useCancelDownloadMutation,
   useDeleteBookMutation,
   useDownloadBookMutation,
+  useGetBookDictionaryEntriesQuery,
   useGetBookQuery,
   useListStatusesQuery,
+  useUpdatePositionMutation,
   useUpdateStatusMutation,
 } from "@/store/localApi"
 import { useLazyGetBookQuery as useLazyGetServerBookQuery } from "@/store/serverApi"
@@ -66,6 +70,11 @@ export default function BookDetailsScreen() {
   const { data: statuses } = useListStatusesQuery()
 
   const [updateStatus] = useUpdateStatusMutation()
+  const [updatePosition] = useUpdatePositionMutation()
+
+  const { data: savedWords } = useGetBookDictionaryEntriesQuery({
+    bookUuid: uuid,
+  })
 
   const [getServerBook, { isLoading: isServerLoading }] =
     useLazyGetServerBookQuery()
@@ -77,6 +86,29 @@ export default function BookDetailsScreen() {
   >(null)
 
   const downloadedFormats = useDownloadedFormats(book)
+
+  const readerFormat = downloadedFormats.includes("readaloud")
+    ? "readaloud"
+    : "ebook"
+
+  // Jumping to a saved word means moving the book's saved place to where the word
+  // was saved and then opening the reader, which starts from that place.
+  const openSavedWord = async (entry: DictionaryEntry) => {
+    await updatePosition({
+      bookUuid: book.uuid,
+      locator: entry.locator,
+      timestamp: Date.now(),
+    })
+      .unwrap()
+      .catch(() => {
+        // Opening the reader at the old place still beats not opening it.
+      })
+
+    router.push({
+      pathname: "/read/[uuid]",
+      params: { uuid: book.uuid, format: readerFormat },
+    })
+  }
 
   const availableFormats = useAvailableFormats(book)
   const onlyFormat = availableFormats[0]
@@ -527,6 +559,35 @@ export default function BookDetailsScreen() {
                     </Button>
                   )}
                 </Group>
+              </>
+            )}
+            {!!savedWords?.length && (
+              <>
+                <Group className="mb-2 flex-row items-center gap-1">
+                  <Icon
+                    as={BookMarked}
+                    size={16}
+                    className="text-muted-foreground"
+                  />
+                  <Text className="text-muted-foreground text-sm">
+                    Saved words
+                  </Text>
+                </Group>
+                <Stack className="mb-4 gap-1">
+                  {savedWords.map((entry) => (
+                    <Button
+                      key={entry.uuid}
+                      accessibilityLabel={`Open saved word ${entry.word}`}
+                      variant="link"
+                      className="h-auto flex-row items-center justify-start px-0 py-1"
+                      onPress={() => {
+                        void openSavedWord(entry)
+                      }}
+                    >
+                      <Text className="text-primary">{entry.word}</Text>
+                    </Button>
+                  ))}
+                </Stack>
               </>
             )}
           </Stack>

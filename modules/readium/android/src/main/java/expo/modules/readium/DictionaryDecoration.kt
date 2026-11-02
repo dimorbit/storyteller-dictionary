@@ -37,7 +37,10 @@ import org.readium.r2.navigator.html.HtmlDecorationTemplates
 data class DictionaryUnderlineStyle(
     @ColorInt val tint: Int,
     @ColorInt val wash: Int = 0,
-    val active: Boolean = false
+    val active: Boolean = false,
+    // The one copy of a word the word was saved from draws the same dots at twice
+    // the pitch, so the row reads sparser without changing the dot itself.
+    val sparse: Boolean = false
 ) : Decoration.Style {
     override fun describeContents(): Int = 0
 
@@ -45,17 +48,25 @@ data class DictionaryUnderlineStyle(
         dest.writeInt(tint)
         dest.writeInt(wash)
         dest.writeInt(if (active) 1 else 0)
+        dest.writeInt(if (sparse) 1 else 0)
     }
 
     companion object CREATOR : Parcelable.Creator<DictionaryUnderlineStyle> {
         override fun createFromParcel(source: Parcel) =
-            DictionaryUnderlineStyle(source.readInt(), source.readInt(), source.readInt() == 1)
+            DictionaryUnderlineStyle(
+                source.readInt(),
+                source.readInt(),
+                source.readInt() == 1,
+                source.readInt() == 1
+            )
 
         override fun newArray(size: Int) = arrayOfNulls<DictionaryUnderlineStyle>(size)
     }
 }
 
 private const val dictionaryUnderlineClass = "storyteller-dictionary-underline"
+
+private const val dictionarySparseClass = "storyteller-dictionary-sparse"
 
 private const val dictionaryActiveClass = "storyteller-dictionary-active"
 
@@ -84,9 +95,12 @@ fun storytellerDecorationTemplates(): HtmlDecorationTemplates {
                 val alpha = String.format(Locale.US, "%.3f", Color.alpha(wash) / 255f)
                 val washColor = "rgba(${Color.red(wash)}, ${Color.green(wash)}, ${Color.blue(wash)}, $alpha)"
                 val active = style?.active == true
-                val classes =
-                    if (active) "$dictionaryUnderlineClass $dictionaryActiveClass"
-                    else dictionaryUnderlineClass
+                val sparse = style?.sparse == true
+                val classes = buildString {
+                    append(dictionaryUnderlineClass)
+                    if (sparse) append(" $dictionarySparseClass")
+                    if (active) append(" $dictionaryActiveClass")
+                }
                 val washRule =
                     if (active) " background-color: $washColor !important;" else ""
                 """<div class="$classes" style="--dictionary-dot-color: $color; --dictionary-active-wash: $washColor;$washRule"/>"""
@@ -117,6 +131,21 @@ fun storytellerDecorationTemplates(): HtmlDecorationTemplates {
                     background-size: ${dictionaryDotEm}em ${dictionaryPitchEm}em;
                     background-repeat: no-repeat round;
                     background-position: calc(100% - $dictionaryInset) 0;
+                }
+                /* The copy the word was saved from keeps the same dot, colour and
+                   inset, with the pitch doubled so the row reads as dots with
+                   wider gaps. These rules follow the writing-mode ones above so
+                   that a sparse mark overrides the pitch in every direction. */
+                .$dictionaryUnderlineClass.$dictionarySparseClass {
+                    background-size: calc(2 * ${dictionaryPitchEm}em) ${dictionaryDotEm}em;
+                }
+                [data-writing-mode="vertical-rl"].$dictionaryUnderlineClass.$dictionarySparseClass,
+                [data-writing-mode="sideways-rl"].$dictionaryUnderlineClass.$dictionarySparseClass,
+                [data-writing-mode="vertical-lr"].$dictionaryUnderlineClass.$dictionarySparseClass {
+                    background-size: ${dictionaryDotEm}em calc(2 * ${dictionaryPitchEm}em);
+                }
+                [data-writing-mode="sideways-lr"].$dictionaryUnderlineClass.$dictionarySparseClass {
+                    background-size: ${dictionaryDotEm}em calc(2 * ${dictionaryPitchEm}em);
                 }
                 /* The tapped word carries the same wash the reader paints over a
                    text selection, so it reads as "this is the word you tapped".

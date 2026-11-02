@@ -23,11 +23,12 @@ export async function getDictionaryEntries() {
 }
 
 export async function getBookDictionaryEntries(bookUuid: UUID) {
+  // Oldest first, which is the order the words were saved in.
   return await db
     .selectFrom("dictionaryEntry")
     .selectAll()
     .where("bookUuid", "=", bookUuid)
-    .orderBy("createdAt", "desc")
+    .orderBy("createdAt", "asc")
     .execute()
 }
 

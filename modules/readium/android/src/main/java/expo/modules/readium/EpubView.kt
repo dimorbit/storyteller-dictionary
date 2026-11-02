@@ -51,6 +51,7 @@ import org.readium.r2.shared.publication.Link
 import kotlin.math.abs
 import kotlin.math.ceil
 import java.io.File
+import java.util.Locale
 
 data class Highlight(val id: String, @ColorInt val color: Int, val locator: Locator)
 
@@ -131,6 +132,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // chapter change settles, and never straight after the previous application.
         private const val DICTIONARY_DECORATION_SETTLE_MS = 80L
         private const val DICTIONARY_DECORATION_GAP_MS = 200L
+
+        // Runs of whitespace in a quote become one space before two quotes are
+        // compared, so the web view's snippet and the chapter text agree.
+        private val whitespaceRun = Regex("\\s+")
     }
 
     // Required for proper layout! Forces Expo to
@@ -1233,9 +1238,33 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     fun decorateDictionaryEntries() {
         val wash = dictionaryWash()
         val tint = props!!.foreground
+        val bookUuid = props!!.bookUuid
         val currentHref = navigator?.currentLocator?.value?.href
         val occurrences = dictionaryOccurrences.filter { it.locator.href == currentHref }
         val searchedUuids = occurrences.map { it.uuid }.toSet()
+
+        // Which copy each saved word was saved from. The stored locator is matched
+        // by the quote it carries rather than by its progression or position, and
+        // only against this book and this chapter, so a locator from elsewhere can
+        // never mark the wrong copy. A quote that matches no copy here, or more
+        // than one, proves nothing: every copy then stays drawn normally.
+        val savedEntries = props!!.dictionaryEntries.filter { entry ->
+            entry.bookUuid == bookUuid &&
+                entry.locator.href == currentHref &&
+                !entry.locator.text.highlight.isNullOrBlank()
+        }
+        val sparseIds = savedEntries
+            .flatMap { entry ->
+                val matches = occurrences.filter { occurrence ->
+                    sameSavedQuote(occurrence.locator.text, entry.locator.text)
+                }
+                if (matches.size == 1) {
+                    listOf("dictionary:${matches[0].uuid}#${matches[0].index}")
+                } else {
+                    emptyList()
+                }
+            }
+            .toSet()
 
         val fromSearch = occurrences.map { occurrence ->
             val id = "dictionary:${occurrence.uuid}#${occurrence.index}"
@@ -1245,7 +1274,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 style = DictionaryUnderlineStyle(
                     tint = tint,
                     wash = wash,
-                    active = activeDictionaryId == id
+                    active = activeDictionaryId == id,
+                    sparse = id in sparseIds
                 )
             )
         }
@@ -1253,10 +1283,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // A saved locator only means anything in the book it was saved from: two
         // books can share a chapter href, and the stored position would then land
         // in the wrong place. It is painted only when the search found nothing for
-        // that word in this chapter.
+        // that word in this chapter. The stored locator is the saved place itself,
+        // so it draws the sparser row.
         val fromSavedLocator = props!!.dictionaryEntries
             .filter { entry ->
-                entry.bookUuid == props!!.bookUuid &&
+                entry.bookUuid == bookUuid &&
                     entry.locator.href == currentHref &&
                     entry.id !in searchedUuids
             }
@@ -1268,7 +1299,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     style = DictionaryUnderlineStyle(
                         tint = tint,
                         wash = wash,
-                        active = activeDictionaryId == id
+                        active = activeDictionaryId == id,
+                        sparse = true
                     )
                 )
             }
@@ -1276,6 +1308,22 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         dictionaryDecorations = fromSearch + fromSavedLocator
         applyDictionaryDecorations()
     }
+
+    // True when the quote found in the chapter is the quote the word was saved
+    // from. Whitespace and case are flattened first. The stored snippet is longer
+    // than the one the chapter search keeps, so only the overlapping edge is
+    // compared: the text before the word has to end the stored text before it, and
+    // the text after has to start the stored text after it.
+    private fun sameSavedQuote(found: Locator.Text, stored: Locator.Text): Boolean {
+        val highlight = normalizeQuote(found.highlight)
+        if (highlight.isEmpty()) return false
+        if (highlight != normalizeQuote(stored.highlight)) return false
+        return normalizeQuote(stored.before).endsWith(normalizeQuote(found.before)) &&
+            normalizeQuote(stored.after).startsWith(normalizeQuote(found.after))
+    }
+
+    private fun normalizeQuote(text: String?): String =
+        text?.replace(whitespaceRun, " ")?.lowercase(Locale.ROOT) ?: ""
 
     private fun applyDictionaryDecorations() {
         // A burst of updates is painted once: the running painter takes whatever the
@@ -1324,6 +1372,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     fun setActiveDictionaryDecoration(id: String?) {
         if (activeDictionaryId == id) return
         activeDictionaryId = id
+        // Clearing the wash repaints the group from empty. A mark the reader left
+        // behind on an earlier paint still carries the active class, and the diff
+        // only knows the marks in the newest list, so it would stay washed.
+        if (id == null) decoratedDictionaryHref = null
         decorateDictionaryEntries()
     }
 
