@@ -119,6 +119,31 @@ object BookService {
         return clips.first { Url.fromEpubHref(it.textResource) == locator.href && it.fragmentId == fragment }
     }
 
+    // A locator with no fragment still names a chapter. Its clip is the last one in that
+    // chapter that starts at or before the locator's progression, measured the way
+    // buildFragmentLocator measures it, so the seek lands near the saved place.
+    suspend fun getClipInChapter(bookUuid: String, locator: Locator): OverlayPar? {
+        val clips = this.clips[bookUuid] ?: return null
+        val chapterClips = clips.filter { Url.fromEpubHref(it.textResource) == locator.href }
+        val firstClip = chapterClips.firstOrNull() ?: return null
+        val progression = locator.locations.progression ?: return firstClip
+
+        val publication = getPublication(bookUuid) ?: return firstClip
+        val link = publication.linkWithHref(locator.href) ?: return firstClip
+        val resource = publication.get(link) ?: return firstClip
+        val htmlContent = try {
+            resource.readDecodeOrNull { Try.success(it.decodeString()) }?.getOrNull()
+        } finally {
+            resource.close()
+        }
+        if (htmlContent == null) return firstClip
+
+        return chapterClips.lastOrNull { clip ->
+            val start = htmlContent.indexOf("id=\"${clip.fragmentId}\"")
+            start >= 0 && start.toDouble() / htmlContent.length <= progression
+        } ?: firstClip
+    }
+
     fun getOverlayClips(bookUuid: String): List<OverlayPar> {
         return this.clips[bookUuid] ?: listOf()
     }

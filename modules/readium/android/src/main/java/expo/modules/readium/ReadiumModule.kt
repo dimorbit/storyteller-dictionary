@@ -181,7 +181,10 @@ class ReadiumModule : Module(), Listener {
                 { bookUuid: String, locatorMap: Map<String, Any> ->
                     val locatorJson = JSONObject(locatorMap)
                     val locator = Locator.fromJSON(locatorJson) ?: return@Coroutine null
-                    val clip = BookService.getClip(bookUuid, locator) ?: return@Coroutine null
+                    // Throws rather than returning null, so the JS caller tries the readaloud position.
+                    val clip = BookService.getClip(bookUuid, locator)
+                        ?: BookService.getClipInChapter(bookUuid, locator)
+                        ?: throw Exception("No audio clip for ${locator.href} in book $bookUuid")
 
                     return@Coroutine clip.toJson()
                 }

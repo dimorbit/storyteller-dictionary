@@ -133,9 +133,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         private const val DICTIONARY_DECORATION_SETTLE_MS = 80L
         private const val DICTIONARY_DECORATION_GAP_MS = 200L
 
-        // Runs of whitespace in a quote become one space before two quotes are
-        // compared, so the web view's snippet and the chapter text agree.
-        private val whitespaceRun = Regex("\\s+")
+        // Runs of whitespace and punctuation in a quote become one space before two
+        // quotes are compared, so a saved "hello," matches the bare word the chapter search
+        // finds, and the web view's snippet agrees with the chapter text.
+        private val quoteSeparatorRun = Regex("[\\s\\p{Z}\\p{P}\\p{S}]+")
 
         // Readium's group.add does not check for an id the group already holds. A page
         // that finishes loading while a diff is being worked out gets the whole list,
@@ -1332,10 +1333,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     // True when the quote found in the chapter is the quote the word was saved
-    // from. Whitespace and case are flattened first. The stored snippet is longer
-    // than the one the chapter search keeps, so only the overlapping edge is
-    // compared: the text before the word has to end the stored text before it, and
-    // the text after has to start the stored text after it.
+    // from. Whitespace, punctuation and case are flattened first. The stored
+    // snippet is longer than the one the chapter search keeps, so only the
+    // overlapping edge is compared: the text before the word has to end the stored
+    // text before it, and the text after has to start the stored text after it.
     private fun sameSavedQuote(found: Locator.Text, stored: Locator.Text): Boolean {
         val highlight = normalizeQuote(found.highlight)
         if (highlight.isEmpty()) return false
@@ -1345,7 +1346,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private fun normalizeQuote(text: String?): String =
-        text?.replace(whitespaceRun, " ")?.lowercase(Locale.ROOT) ?: ""
+        text?.replace(quoteSeparatorRun, " ")?.trim()?.lowercase(Locale.ROOT) ?: ""
 
     private fun applyDictionaryDecorations() {
         // A burst of updates is painted once: the running painter takes whatever the
