@@ -133,9 +133,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         private const val DICTIONARY_DECORATION_SETTLE_MS = 80L
         private const val DICTIONARY_DECORATION_GAP_MS = 200L
 
-        // Runs of whitespace in a quote become one space before two quotes are
-        // compared, so the web view's snippet and the chapter text agree.
-        private val whitespaceRun = Regex("\\s+")
+        // Runs of whitespace and punctuation in a quote become one space before two
+        // quotes are compared, so a saved "hello," matches the bare word the chapter search
+        // finds, and the web view's snippet agrees with the chapter text.
+        private val quoteSeparatorRun = Regex("[\\s\\p{Z}\\p{P}\\p{S}]+")
 
         // Readium's group.add does not check for an id the group already holds. A page
         // that finishes loading while a diff is being worked out gets the whole list,
@@ -904,6 +905,56 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
     }
 
+    /**
+     * Readium builds a selection's locator from the page's locator, which names no audio
+     * clip, so a saved word could not be matched to its clip later. This adds the id of the
+     * clip the selection starts in, or the nearest clip when it starts outside all of them,
+     * while the page is live and the position is exact. A book without clips, or a page that
+     * cannot answer, leaves [locator] as it was.
+     */
+    suspend fun locatorWithClip(locator: Locator): Locator {
+        val bookUuid = props?.bookUuid ?: return locator
+        val clipIds = BookService.getFragments(bookUuid, locator).map { it.fragmentId }
+        if (clipIds.isEmpty()) return locator
+
+        val result = navigator?.evaluateJavascript(
+            """
+            (function(clipIds) {
+                const selection = window.getSelection();
+                if (!selection || selection.rangeCount === 0) return null;
+
+                const range = selection.getRangeAt(0);
+                let start = range.startContainer;
+                if (start.nodeType === Node.ELEMENT_NODE && range.startOffset < start.childNodes.length) {
+                    start = start.childNodes[range.startOffset];
+                }
+
+                const clips = new Set(clipIds);
+                let element = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
+                for (; element; element = element.parentElement) {
+                    if (clips.has(element.id)) return element.id;
+                }
+
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+                walker.currentNode = start;
+                for (let next = walker.nextNode(); next; next = walker.nextNode()) {
+                    if (clips.has(next.id)) return next.id;
+                }
+                walker.currentNode = start;
+                for (let previous = walker.previousNode(); previous; previous = walker.previousNode()) {
+                    if (clips.has(previous.id)) return previous.id;
+                }
+                return null;
+            })(${JSONArray(clipIds)});
+            """.trimIndent()
+        ) ?: return locator
+
+        val clipId = runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
+            ?: return locator
+
+        return locator.copy(locations = locator.locations.copy(fragments = listOf(clipId)))
+    }
+
     fun go(locator: Locator, scrollAfterNavigation: Boolean = false) {
         if (locator.href != navigator?.currentLocator?.value?.href) {
             changingResource = true
@@ -1332,10 +1383,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     // True when the quote found in the chapter is the quote the word was saved
-    // from. Whitespace and case are flattened first. The stored snippet is longer
-    // than the one the chapter search keeps, so only the overlapping edge is
-    // compared: the text before the word has to end the stored text before it, and
-    // the text after has to start the stored text after it.
+    // from. Whitespace, punctuation and case are flattened first. The stored
+    // snippet is longer than the one the chapter search keeps, so only the
+    // overlapping edge is compared: the text before the word has to end the stored
+    // text before it, and the text after has to start the stored text after it.
     private fun sameSavedQuote(found: Locator.Text, stored: Locator.Text): Boolean {
         val highlight = normalizeQuote(found.highlight)
         if (highlight.isEmpty()) return false
@@ -1345,7 +1396,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private fun normalizeQuote(text: String?): String =
-        text?.replace(whitespaceRun, " ")?.lowercase(Locale.ROOT) ?: ""
+        text?.replace(quoteSeparatorRun, " ")?.trim()?.lowercase(Locale.ROOT) ?: ""
 
     private fun applyDictionaryDecorations() {
         // A burst of updates is painted once: the running painter takes whatever the

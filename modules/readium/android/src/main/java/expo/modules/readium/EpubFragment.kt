@@ -37,7 +37,7 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
                 val y = ceil(it.top / epubView.resources.displayMetrics.density).toInt() - 16
                 epubView.onSelection(
                     mapOf(
-                        "locator" to selection.locator.toJSON().toMap(),
+                        "locator" to epubView.locatorWithClip(selection.locator).toJSON().toMap(),
                         "x" to x,
                         "y" to y
                     )
