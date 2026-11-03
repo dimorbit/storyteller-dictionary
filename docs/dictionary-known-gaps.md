@@ -27,8 +27,15 @@ is still in that history.
 The fix is to treat a position as an echo only while it is actually pending, and to drop it from
 the history once it has come back.
 
+## Checked on the emulator
+
+- Saving a word with a trailing full stop stores it without the punctuation, and it appears last
+  in the saved words list.
+- Tapping that word opens the reader at the exact copy it was saved from, with the wider dot
+  spacing at that copy.
+- A jump does move the audio. With the audiobook paused at 9:21, tapping the saved word put the
+  player back at 0:44, the clip that covers that word.
+
 ## Not verified on a device
 
-- That a jump from book details actually moves the audio. This needs an audiobook and a real
-  listening check.
 - That the same-clip jump scrolls in paused scroll mode.
