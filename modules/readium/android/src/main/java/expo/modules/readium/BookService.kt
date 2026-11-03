@@ -119,9 +119,29 @@ object BookService {
         return clips.first { Url.fromEpubHref(it.textResource) == locator.href && it.fragmentId == fragment }
     }
 
+    // Markup and the head are not text the reader sees, so they are left out of clip positions
+    // as well as out of the chapter length, matching how the saved progression is measured.
+    private val invisibleMarkup = Regex(
+        "<head\\b.*?</head>|<script\\b.*?</script>|<style\\b.*?</style>|<!--.*?-->|<[^>]*>",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+
+    // For each index in [html], how many characters before it are visible text.
+    private fun visibleTextOffsets(html: String): IntArray {
+        val invisible = BooleanArray(html.length)
+        invisibleMarkup.findAll(html).forEach { match ->
+            match.range.forEach { invisible[it] = true }
+        }
+        val offsets = IntArray(html.length + 1)
+        for (i in html.indices) {
+            offsets[i + 1] = offsets[i] + (if (invisible[i]) 0 else 1)
+        }
+        return offsets
+    }
+
     // A locator with no fragment still names a chapter. Its clip is the last one in that
-    // chapter that starts at or before the locator's progression, measured the way
-    // buildFragmentLocator measures it, so the seek lands near the saved place.
+    // chapter that starts at or before the locator's progression. Both are measured over the
+    // chapter's visible text, so the seek lands near the saved place.
     suspend fun getClipInChapter(bookUuid: String, locator: Locator): OverlayPar? {
         val clips = this.clips[bookUuid] ?: return null
         val chapterClips = clips.filter { Url.fromEpubHref(it.textResource) == locator.href }
@@ -138,9 +158,13 @@ object BookService {
         }
         if (htmlContent == null) return firstClip
 
+        val offsets = visibleTextOffsets(htmlContent)
+        val visibleLength = offsets.last()
+        if (visibleLength == 0) return firstClip
+
         return chapterClips.lastOrNull { clip ->
             val start = htmlContent.indexOf("id=\"${clip.fragmentId}\"")
-            start >= 0 && start.toDouble() / htmlContent.length <= progression
+            start >= 0 && offsets[start].toDouble() / visibleLength <= progression
         } ?: firstClip
     }
 
