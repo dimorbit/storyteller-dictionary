@@ -133,6 +133,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         private const val DICTIONARY_DECORATION_SETTLE_MS = 80L
         private const val DICTIONARY_DECORATION_GAP_MS = 200L
 
+        // Enough recent emitted locators to cover the reader echoing them back late.
+        private const val EMITTED_LOCATOR_HISTORY = 32
+
         // Runs of whitespace and punctuation in a quote become one space before two
         // quotes are compared, so a saved "hello," matches the bare word the chapter search
         // finds, and the web view's snippet agrees with the chapter text.
@@ -226,7 +229,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     var locationEmitter: Job? = null
 
     private var changingResource = false
-    private var lastEmittedLocator: Locator? = null
+    // Recent locators this view emitted, newest last. The reader sends each one back as the
+    // locator prop, sometimes after newer ones were emitted, so such an echo is not a jump.
+    private val emittedLocators = ArrayDeque<Locator>()
     private var firstPageLoaded = CompletableDeferred<Unit>()
     private val scrollModeChapterNavigator = ScrollModeChapterNavigator()
 
@@ -322,11 +327,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         if (lhs.href != rhs.href) return false
 
+        // The audio clip id only narrows the match: progression decides between two
+        // positions in the same clip.
         val lhsFragment = lhs.locations.fragments.firstOrNull()
         val rhsFragment = rhs.locations.fragments.firstOrNull()
-        if (lhsFragment != null || rhsFragment != null) {
-            return lhsFragment == rhsFragment
-        }
+        if (lhsFragment != rhsFragment) return false
 
         val lhsProgression = lhs.locations.progression
         val rhsProgression = rhs.locations.progression
@@ -340,7 +345,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private fun emitLocatorChange(locator: Locator) {
-        lastEmittedLocator = locator
+        emittedLocators.addLast(locator)
+        if (emittedLocators.size > EMITTED_LOCATOR_HISTORY) emittedLocators.removeFirst()
         onLocatorChange(locator.toJSON().toMap())
     }
 
@@ -621,7 +627,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val enteredPageLayout = oldProps?.scrollMode == true && !finalProps.scrollMode
         val locatorChangedFromExternalUpdate = finalProps.locator != null &&
             !isSameLocatorPosition(finalProps.locator, oldProps?.locator) &&
-            !isSameLocatorPosition(finalProps.locator, lastEmittedLocator)
+            emittedLocators.none { isSameLocatorPosition(finalProps.locator, it) }
         val playbackStarted = finalProps.isPlaying && oldProps?.isPlaying != true
         val layoutChange = LayoutChange(
             finalProps = finalProps,
