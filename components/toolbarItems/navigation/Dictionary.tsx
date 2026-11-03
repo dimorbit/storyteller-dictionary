@@ -1,9 +1,19 @@
-import { SectionList, View } from "react-native"
+import { Circle, CircleDot, Funnel } from "lucide-react-native"
+import { type ReactNode, useState } from "react"
+import { Pressable, SectionList, View } from "react-native"
 
+import {
+  type DictionaryScope,
+  getLastDictionaryScope,
+  setLastDictionaryScope,
+} from "@/components/toolbarItems/navigation/navigationMenuSessionState"
 import { useReaderFormSheetScrollPaddingBottom } from "@/components/toolbarItems/readerFormSheetLayout"
+import { Button } from "@/components/ui/button"
+import { Icon } from "@/components/ui/icon"
 import { Text } from "@/components/ui/text"
 import { type DictionaryEntry } from "@/database/dictionary"
 import { useGetDictionaryEntriesQuery } from "@/store/localApi"
+import { type UUID } from "@/uuid"
 
 type DictionarySection = {
   dateKey: string
@@ -11,48 +21,130 @@ type DictionarySection = {
   data: DictionaryEntry[]
 }
 
-export function Dictionary() {
+const scopeOptions: { scope: DictionaryScope; label: string }[] = [
+  { scope: "book", label: "This book" },
+  { scope: "all", label: "All books" },
+]
+
+interface Props {
+  bookUuid?: UUID | undefined
+}
+
+export function Dictionary({ bookUuid }: Props) {
   const { data: entries, isLoading } = useGetDictionaryEntriesQuery()
   const paddingBottom = useReaderFormSheetScrollPaddingBottom()
+  const [scope, setScope] = useState(getLastDictionaryScope)
+  const [filterOpen, setFilterOpen] = useState(false)
 
-  const sections = groupEntriesByDate(entries ?? [])
+  const hasBook = Boolean(bookUuid)
+  const allEntries = entries ?? []
+  const visibleEntries =
+    hasBook && scope === "book"
+      ? allEntries.filter((entry) => entry.bookUuid === bookUuid)
+      : allEntries
+  const sections = groupEntriesByDate(visibleEntries)
 
+  const chooseScope = (nextScope: DictionaryScope) => {
+    setLastDictionaryScope(nextScope)
+    setScope(nextScope)
+    setFilterOpen(false)
+  }
+
+  let body: ReactNode
   if (isLoading) {
-    return (
+    body = (
       <View className="flex-1 items-center justify-center px-8">
         <Text className="text-muted-foreground">Loading dictionary...</Text>
       </View>
     )
-  }
-
-  if (!entries?.length) {
-    return (
+  } else if (!allEntries.length) {
+    body = (
       <View className="flex-1 items-center justify-center px-8">
         <Text className="text-muted-foreground text-center">
           Words you look up while reading will appear here.
         </Text>
       </View>
     )
+  } else if (!visibleEntries.length) {
+    body = (
+      <View className="flex-1 items-center justify-center px-8">
+        <Text className="text-muted-foreground text-center">
+          No words saved from this book yet.
+        </Text>
+      </View>
+    )
+  } else {
+    body = (
+      <SectionList
+        className="flex-1"
+        sections={sections}
+        keyExtractor={(entry) => entry.uuid}
+        stickySectionHeadersEnabled={false}
+        contentContainerStyle={{ paddingBottom }}
+        renderSectionHeader={({ section }) => (
+          <Text className="text-muted-foreground px-4 pt-4 pb-2 text-sm">
+            {section.title}
+          </Text>
+        )}
+        renderItem={({ item }) => (
+          <View className="bg-secondary mx-2 mb-2 rounded-lg px-4 py-3">
+            <Text className="text-lg">{item.word}</Text>
+          </View>
+        )}
+      />
+    )
   }
 
   return (
-    <SectionList
-      className="flex-1"
-      sections={sections}
-      keyExtractor={(entry) => entry.uuid}
-      stickySectionHeadersEnabled={false}
-      contentContainerStyle={{ paddingBottom }}
-      renderSectionHeader={({ section }) => (
-        <Text className="text-muted-foreground px-4 pt-4 pb-2 text-sm">
-          {section.title}
-        </Text>
-      )}
-      renderItem={({ item }) => (
-        <View className="bg-secondary mx-2 mb-2 rounded-lg px-4 py-3">
-          <Text className="text-lg">{item.word}</Text>
-        </View>
-      )}
-    />
+    <View className="flex-1">
+      <View className="h-14 flex-row items-center justify-between pr-2 pl-4">
+        <Text variant="large">Saved words</Text>
+        {hasBook ? (
+          <Button
+            accessibilityLabel="Filter saved words"
+            variant="ghost"
+            size="icon"
+            onPress={() => setFilterOpen((open) => !open)}
+          >
+            <Icon as={Funnel} size={24} />
+          </Button>
+        ) : null}
+      </View>
+      {body}
+      {hasBook && filterOpen ? (
+        <>
+          <Pressable
+            accessibilityLabel="Close filter"
+            accessibilityRole="button"
+            className="absolute top-0 right-0 bottom-0 left-0 z-50"
+            onPress={() => setFilterOpen(false)}
+          />
+          <View className="border-border bg-popover absolute top-14 right-2 z-50 w-44 rounded-md border p-1 shadow-lg shadow-black/5">
+            {scopeOptions.map((option) => {
+              const selected = option.scope === scope
+              return (
+                <Button
+                  key={option.scope}
+                  accessibilityState={{ selected }}
+                  className="h-auto justify-start rounded-sm px-3 py-2 sm:h-auto"
+                  variant="ghost"
+                  onPress={() => chooseScope(option.scope)}
+                >
+                  <Icon
+                    as={selected ? CircleDot : Circle}
+                    className={
+                      selected ? "text-primary" : "text-muted-foreground"
+                    }
+                    size={18}
+                  />
+                  <Text>{option.label}</Text>
+                </Button>
+              )
+            })}
+          </View>
+        </>
+      ) : null}
+    </View>
   )
 }
 

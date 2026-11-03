@@ -31,3 +31,16 @@ export function getNavigationMenuTabFromPathname(
 
   return tab && isNavigationMenuTab(tab) ? tab : undefined
 }
+
+export type DictionaryScope = "book" | "all"
+
+const fallbackDictionaryScope: DictionaryScope = "all"
+let lastDictionaryScope: DictionaryScope = fallbackDictionaryScope
+
+export function getLastDictionaryScope() {
+  return lastDictionaryScope
+}
+
+export function setLastDictionaryScope(scope: DictionaryScope) {
+  lastDictionaryScope = scope
+}
