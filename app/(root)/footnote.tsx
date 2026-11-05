@@ -47,6 +47,7 @@ export default function FootnoteScreen() {
           contentContainerClassName="px-6 pb-20"
         >
           <View>
+            {/* Expo's DOM webview can reject an early injectJavaScript on Android. react-native-webview does not. */}
             <Footnote
               footnote={
                 Platform.OS === "ios"
@@ -54,7 +55,7 @@ export default function FootnoteScreen() {
                   : footnoteContent
               }
               textColor={foreground}
-              dom={{ matchContents: true }}
+              dom={{ matchContents: true, useExpoDOMWebView: false }}
             />
           </View>
         </ScrollView>
