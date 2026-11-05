@@ -12,20 +12,24 @@ Words saved before this change carry no clip id. For those, the page still moves
 stays where it was. That is deliberate: a guessed clip can land in the wrong place, and the
 clip listener then saves that wrong place as your reading position.
 
-## Two known gaps in scroll mode
+## Scroll mode jumps
 
-Both only affect paused scroll mode, and only within a single chapter.
+Written 2026-11-05, after the echo fix landed.
 
-1. Tapping a bookmark for a place you visited recently does not scroll to it. The saved position
-   updates, the page does not move.
-2. Tapping return to previous position does not scroll, for the same reason.
+In paused scroll mode, tapping a bookmark for a place you visited a moment ago, or tapping return
+to previous position, used to update the saved position without moving the page. Both now scroll.
 
-The cause is the history of recently reported positions. It exists so the reader does not scroll
-back to its own echoes while you read, but it also swallows a deliberate jump to a position that
-is still in that history.
+The cause was the list of recently reported positions. It exists so the reader does not scroll
+back to its own echoes while you read, but a position stayed in that list after the reader had
+already sent it back, so a deliberate jump to that place was taken for an echo and skipped. A
+position now counts as an echo only while it is pending, and leaves the list as soon as it comes
+back.
 
-The fix is to treat a position as an echo only while it is actually pending, and to drop it from
-the history once it has come back.
+One case is still open. Positions reported while the audiobook is playing never come back as
+echoes, so they stay pending. A bookmark jump to one of those exact places, before any newer
+echo arrives, is still swallowed. The fix for it needs care: the native playing flag lags the
+JavaScript one at the moment of a pause, so gating on it could make the reader scroll to its own
+echo, which is worse than the gap.
 
 ## Checked on the emulator
 
@@ -35,6 +39,9 @@ the history once it has come back.
   spacing at that copy.
 - A jump does move the audio. With the audiobook paused at 9:21, tapping the saved word put the
   player back at 0:44, the clip that covers that word.
+- A bookmark made in scroll layout, then a short scroll away, then a tap on that bookmark: the
+  page came back to the bookmarked place, page 8 of 10 at 12%, and then kept following the
+  finger without snapping back.
 
 ## Not verified on a device
 
