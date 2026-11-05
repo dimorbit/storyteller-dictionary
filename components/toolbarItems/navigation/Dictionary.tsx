@@ -1,6 +1,6 @@
 import { Circle, CircleDot, Funnel } from "lucide-react-native"
 import { type ReactNode, useState } from "react"
-import { Pressable, SectionList, View } from "react-native"
+import { Pressable, ScrollView, SectionList, View } from "react-native"
 
 import {
   type DictionaryScope,
@@ -26,6 +26,10 @@ const scopeOptions: { scope: DictionaryScope; label: string }[] = [
   { scope: "all", label: "All books" },
 ]
 
+// Menu sits under the h-14 header and stops 8px above the panel bottom.
+const menuTop = 56
+const menuBottomGap = 8
+
 interface Props {
   bookUuid?: UUID | undefined
 }
@@ -35,6 +39,11 @@ export function Dictionary({ bookUuid }: Props) {
   const paddingBottom = useReaderFormSheetScrollPaddingBottom()
   const [scope, setScope] = useState(getLastDictionaryScope)
   const [filterOpen, setFilterOpen] = useState(false)
+  const [panelHeight, setPanelHeight] = useState<number>()
+  const menuMaxHeight =
+    panelHeight === undefined
+      ? undefined
+      : Math.max(0, panelHeight - menuTop - menuBottomGap)
 
   const hasBook = Boolean(bookUuid)
   const allEntries = entries ?? []
@@ -96,7 +105,10 @@ export function Dictionary({ bookUuid }: Props) {
   }
 
   return (
-    <View className="flex-1">
+    <View
+      className="flex-1"
+      onLayout={(event) => setPanelHeight(event.nativeEvent.layout.height)}
+    >
       <View className="h-14 flex-row items-center justify-between pr-2 pl-4">
         <Text variant="large">Saved words</Text>
         {hasBook ? (
@@ -119,28 +131,33 @@ export function Dictionary({ bookUuid }: Props) {
             className="absolute top-0 right-0 bottom-0 left-0 z-50"
             onPress={() => setFilterOpen(false)}
           />
-          <View className="border-border bg-popover absolute top-14 right-2 z-50 w-44 rounded-md border p-1 shadow-lg shadow-black/5">
-            {scopeOptions.map((option) => {
-              const selected = option.scope === scope
-              return (
-                <Button
-                  key={option.scope}
-                  accessibilityState={{ selected }}
-                  className="h-auto justify-start rounded-sm px-3 py-2 sm:h-auto"
-                  variant="ghost"
-                  onPress={() => chooseScope(option.scope)}
-                >
-                  <Icon
-                    as={selected ? CircleDot : Circle}
-                    className={
-                      selected ? "text-primary" : "text-muted-foreground"
-                    }
-                    size={18}
-                  />
-                  <Text>{option.label}</Text>
-                </Button>
-              )
-            })}
+          <View
+            className="border-border bg-popover absolute top-14 right-2 z-50 w-44 rounded-md border p-1 shadow-lg shadow-black/5"
+            style={{ maxHeight: menuMaxHeight }}
+          >
+            <ScrollView>
+              {scopeOptions.map((option) => {
+                const selected = option.scope === scope
+                return (
+                  <Button
+                    key={option.scope}
+                    accessibilityState={{ selected }}
+                    className="h-auto justify-start rounded-sm px-3 py-2 sm:h-auto"
+                    variant="ghost"
+                    onPress={() => chooseScope(option.scope)}
+                  >
+                    <Icon
+                      as={selected ? CircleDot : Circle}
+                      className={
+                        selected ? "text-primary" : "text-muted-foreground"
+                      }
+                      size={18}
+                    />
+                    <Text>{option.label}</Text>
+                  </Button>
+                )
+              })}
+            </ScrollView>
           </View>
         </>
       ) : null}
