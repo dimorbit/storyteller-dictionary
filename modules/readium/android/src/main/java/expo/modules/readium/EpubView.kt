@@ -133,8 +133,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         private const val DICTIONARY_DECORATION_SETTLE_MS = 80L
         private const val DICTIONARY_DECORATION_GAP_MS = 200L
 
-        // Enough recent emitted locators to cover the reader echoing them back late.
-        private const val EMITTED_LOCATOR_HISTORY = 32
+        // Enough pending echoes to cover the reader sending them back late.
+        private const val PENDING_LOCATOR_ECHO_LIMIT = 32
 
         // Runs of whitespace and punctuation in a quote become one space before two
         // quotes are compared, so a saved "hello," matches the bare word the chapter search
@@ -229,9 +229,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     var locationEmitter: Job? = null
 
     private var changingResource = false
-    // Recent locators this view emitted, newest last. The reader sends each one back as the
-    // locator prop, sometimes after newer ones were emitted, so such an echo is not a jump.
-    private val emittedLocators = ArrayDeque<Locator>()
+    // Locators this view emitted that the reader has not sent back yet, oldest first. The
+    // reader sends each one back as the locator prop, sometimes after newer ones were
+    // emitted, so such an echo is not a jump. Once it has come back it is dropped, so a
+    // later jump to the same place is not taken for an echo.
+    private val pendingLocatorEchoes = ArrayDeque<Locator>()
     private var firstPageLoaded = CompletableDeferred<Unit>()
     private val scrollModeChapterNavigator = ScrollModeChapterNavigator()
 
@@ -345,9 +347,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private fun emitLocatorChange(locator: Locator) {
-        emittedLocators.addLast(locator)
-        if (emittedLocators.size > EMITTED_LOCATOR_HISTORY) emittedLocators.removeFirst()
+        pendingLocatorEchoes.addLast(locator)
+        if (pendingLocatorEchoes.size > PENDING_LOCATOR_ECHO_LIMIT) pendingLocatorEchoes.removeFirst()
         onLocatorChange(locator.toJSON().toMap())
+    }
+
+    // Takes the pending locator that this locator echoes, if there is one. Older pending
+    // locators go with it, because the reader has already moved on past them.
+    private fun takeLocatorEcho(locator: Locator): Boolean {
+        val index = pendingLocatorEchoes.indexOfFirst { isSameLocatorPosition(locator, it) }
+        if (index < 0) return false
+        repeat(index + 1) { pendingLocatorEchoes.removeFirst() }
+        return true
     }
 
     private data class LayoutChange(
@@ -625,9 +636,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val customFontsChanged = finalProps.customFonts != oldProps?.customFonts
         val fontFamilyChanged = finalProps.fontFamily != oldProps?.fontFamily
         val enteredPageLayout = oldProps?.scrollMode == true && !finalProps.scrollMode
-        val locatorChangedFromExternalUpdate = finalProps.locator != null &&
-            !isSameLocatorPosition(finalProps.locator, oldProps?.locator) &&
-            emittedLocators.none { isSameLocatorPosition(finalProps.locator, it) }
+        // Only a changed locator can be an echo, and taking it removes it from the pending list.
+        val propLocator = finalProps.locator
+        val locatorChangedFromExternalUpdate = propLocator != null &&
+            !isSameLocatorPosition(propLocator, oldProps?.locator) &&
+            !takeLocatorEcho(propLocator)
         val playbackStarted = finalProps.isPlaying && oldProps?.isPlaying != true
         val layoutChange = LayoutChange(
             finalProps = finalProps,
