@@ -30,6 +30,7 @@ import {
   getCurrentlyPlayingBookUuid,
   getCurrentlyPlayingFormat,
   getIsPlaying,
+  getJumpHold,
   getReturnToPosition,
 } from "@/store/selectors/bookshelfSelectors"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
@@ -115,6 +116,18 @@ startAppListening({
     const clip = await getClip(book, format, locator, positions)
 
     if (!clip) return
+
+    listenerApi.dispatch(
+      bookshelfSlice.actions.jumpTargetResolved({
+        bookUuid,
+        timestamp,
+        target: {
+          relativeUrl: clip.relativeUrl,
+          start: clip.start,
+          end: clip.end,
+        },
+      }),
+    )
 
     if (action.type === bookDoubleTapped.type) {
       await Storyteller.seekTo(clip.relativeUrl, clip.start + 0.01, true)
@@ -211,6 +224,8 @@ startAppListening({
       getIsPlaying(listenerApi.getState())
     )
       return
+    // The stop position is still the old place while a jump waits for the audio.
+    if (getJumpHold(listenerApi.getOriginalState())) return
 
     listenerApi.unsubscribe()
     try {
@@ -263,6 +278,8 @@ startAppListening({
         listenerApi.getState(),
       )
       if (!currentBookUuid) return
+      // Clips reported before a jump settles would pull the reader back.
+      if (getJumpHold(listenerApi.getState())) return
 
       const locator = clip.locator
 

@@ -150,12 +150,19 @@ function getReadaloudLocatorFromAudiobook(
   return position
 }
 
+// `end` is only known for readaloud clips, not audiobook ones.
+type ClipPlace = {
+  relativeUrl: string
+  start: number
+  end?: number | undefined
+}
+
 export async function getClip(
   book: BookWithRelations,
   format: "audiobook" | "ebook" | "readaloud",
   locator: ReadiumLocator,
   positions: ReadiumLocator[] | null,
-): Promise<{ relativeUrl: string; start: number } | null> {
+): Promise<ClipPlace | null> {
   if (format === "audiobook") {
     return getAudiobookClip(book, locator)
   }

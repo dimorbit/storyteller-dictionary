@@ -6,16 +6,35 @@ import {
   type StorytellerTrack,
 } from "@/modules/readium/src/Readium.types"
 import {
+  bookDoubleTapped,
   bookmarkPressed,
   clearReturnPosition,
+  miniPlayerSliderChapterPositionChanged,
   navItemPressed,
+  playerClipChanged,
   returnToPreviousPosition,
+  serverPositionUpdated,
 } from "@/store/actions"
 import { localApi } from "@/store/localApi"
 import { type UUID } from "@/uuid"
 
 export type ReturnToPosition = {
   locator: ReadiumLocator
+}
+
+// Where a jump sent the audio. `end` is missing for audiobook clips.
+export type JumpTarget = {
+  relativeUrl: string
+  start: number
+  end?: number | undefined
+}
+
+// A saved place the audio has not confirmed. Until it does, player reports for
+// the place the reader left must not move the reader.
+export type JumpHold = {
+  bookUuid: UUID
+  timestamp: number
+  target?: JumpTarget | undefined
 }
 
 export type BookshelfState = {
@@ -30,6 +49,7 @@ export type BookshelfState = {
   currentTrackIndex: number
   currentSearchQuery: string | null
   returnToPositions: Record<UUID, ReturnToPosition>
+  jumpHold: JumpHold | null
   footnoteContent: string | null
 }
 
@@ -45,7 +65,43 @@ const initialState: BookshelfState = {
   currentTrackIndex: 0,
   currentSearchQuery: null,
   returnToPositions: {},
+  jumpHold: null,
   footnoteContent: null,
+}
+
+// Player positions are rounded to milliseconds when seeked, so a report a few
+// hundredths of a second early still counts as arriving at the target.
+const jumpTargetSlack = 0.05
+
+// Reports come about once a second, so a short clip can be left before the first
+// report after the seek. The target window is at least this long.
+const jumpTargetMinimumWindow = 1.5
+
+function isInJumpTarget(
+  target: JumpTarget,
+  relativeUrl: string | undefined,
+  position: number,
+) {
+  const windowEnd =
+    target.end === undefined
+      ? Infinity
+      : Math.max(target.end, target.start + jumpTargetMinimumWindow)
+  return (
+    relativeUrl === target.relativeUrl &&
+    position >= target.start - jumpTargetSlack &&
+    position < windowEnd
+  )
+}
+
+function releaseJumpHoldAt(
+  state: BookshelfState,
+  relativeUrl: string | undefined,
+  position: number,
+) {
+  const target = state.jumpHold?.target
+  if (target && isInJumpTarget(target, relativeUrl, position)) {
+    state.jumpHold = null
+  }
 }
 
 export const bookshelfSlice = createSlice({
@@ -74,6 +130,7 @@ export const bookshelfSlice = createSlice({
         state.position = 0
         state.currentTrack = null
         state.currentTrackIndex = 0
+        state.jumpHold = null
       }
     },
     playerQueued(state, action: PayloadAction<{ tracks: StorytellerTrack[] }>) {
@@ -116,6 +173,7 @@ export const bookshelfSlice = createSlice({
     },
     audioPositionChanged(state, action: PayloadAction<{ position: number }>) {
       state.position = action.payload.position
+      releaseJumpHoldAt(state, state.currentTrack?.relativeUri, state.position)
     },
     audioTrackChanged(
       state,
@@ -141,9 +199,29 @@ export const bookshelfSlice = createSlice({
       state.currentTrack = trackFromState ?? action.payload.track
       state.position = action.payload.position
       state.currentTrackIndex = action.payload.index
+      releaseJumpHoldAt(state, action.payload.track.relativeUri, state.position)
     },
     isPlayingChanged(state, action: PayloadAction<{ isPlaying: boolean }>) {
+      const stopped = state.isPlaying && !action.payload.isPlaying
       state.isPlaying = action.payload.isPlaying
+      // A stopped audio never confirms a waiting jump, so stop waiting for it.
+      if (stopped) state.jumpHold = null
+    },
+    jumpTargetResolved(
+      state,
+      action: PayloadAction<{
+        bookUuid: UUID
+        timestamp: number
+        target: JumpTarget
+      }>,
+    ) {
+      const { bookUuid, timestamp, target } = action.payload
+      if (
+        state.jumpHold?.bookUuid === bookUuid &&
+        state.jumpHold.timestamp === timestamp
+      ) {
+        state.jumpHold.target = target
+      }
     },
     bookDeleted(state, action: PayloadAction<{ bookUuid: UUID }>) {
       const { bookUuid } = action.payload
@@ -185,6 +263,29 @@ export const bookshelfSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
+    builder.addCase(bookmarkPressed, (state, action) => {
+      const { bookUuid, timestamp } = action.payload
+      state.jumpHold =
+        bookUuid === state.currentlyPlayingBookUuid
+          ? { bookUuid, timestamp }
+          : null
+    })
+    builder.addCase(playerClipChanged, (state, action) => {
+      const { relativeUrl, start } = action.payload.clip
+      releaseJumpHoldAt(state, relativeUrl, start)
+    })
+    builder.addMatcher(
+      isAnyOf(
+        bookDoubleTapped,
+        miniPlayerSliderChapterPositionChanged,
+        navItemPressed,
+        returnToPreviousPosition,
+        serverPositionUpdated,
+      ),
+      (state) => {
+        state.jumpHold = null
+      },
+    )
     builder.addMatcher(
       localApi.endpoints.deleteBook.matchFulfilled,
       (state, action) => {

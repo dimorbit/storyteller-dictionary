@@ -21,6 +21,10 @@ export function getIsPlaying(state: RootState) {
   return state.bookshelf.isPlaying
 }
 
+export function getJumpHold(state: RootState) {
+  return state.bookshelf.jumpHold
+}
+
 export function getCurrentTrack(state: RootState) {
   return state.bookshelf.currentTrack
 }

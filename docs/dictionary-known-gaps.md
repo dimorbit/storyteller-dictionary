@@ -55,3 +55,16 @@ seconds is a single constant, `PENDING_LOCATOR_ECHO_MAX_AGE_MS`, if that ever ne
 - After the echo expiry change: a bookmark made in scroll layout at page 4 of 12, three swipes
   away to page 6, then a tap on that bookmark, put the page back at page 4 with the same text at
   the top. Slow scrolling afterwards followed the finger and did not jump back.
+
+## Saved word jump while audio plays
+
+Written 2026-11-06.
+
+A jump from a bookmark, highlight or saved word holds the reader on its place while a readaloud
+plays. Player reports from before the jump settled do not move the reader or save a position.
+While it holds, the reader view is told the audio is paused, so it turns no pages toward the
+audio. The hold ends when the player reports the clip the jump asked for, when the audio pauses
+or stops, or when another jump or a reopened book replaces it. It has no timer.
+
+A place whose clip the audio cannot find stays put only until the audio is paused. After you
+resume, the reader follows the audio again.

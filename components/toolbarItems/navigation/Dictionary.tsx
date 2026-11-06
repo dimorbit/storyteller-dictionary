@@ -1,4 +1,5 @@
-import { useFocusEffect } from "expo-router"
+import { skipToken } from "@reduxjs/toolkit/query"
+import { router, useFocusEffect } from "expo-router"
 import { Circle, CircleDot, Funnel } from "lucide-react-native"
 import { type ReactNode, useCallback, useState } from "react"
 import {
@@ -19,7 +20,9 @@ import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { Text } from "@/components/ui/text"
 import { type DictionaryEntry } from "@/database/dictionary"
-import { useGetDictionaryEntriesQuery } from "@/store/localApi"
+import { bookmarkPressed } from "@/store/actions"
+import { useAppDispatch } from "@/store/appState"
+import { useGetBookQuery, useGetDictionaryEntriesQuery } from "@/store/localApi"
 import { type UUID } from "@/uuid"
 
 type DictionarySection = {
@@ -43,6 +46,10 @@ interface Props {
 
 export function Dictionary({ bookUuid }: Props) {
   const { data: entries, isLoading } = useGetDictionaryEntriesQuery()
+  const { data: book } = useGetBookQuery(
+    bookUuid ? { uuid: bookUuid } : skipToken,
+  )
+  const dispatch = useAppDispatch()
   const paddingBottom = useReaderFormSheetScrollPaddingBottom()
   const [scope, setScope] = useState(getLastDictionaryScope)
   const [filterOpen, setFilterOpen] = useState(false)
@@ -64,6 +71,21 @@ export function Dictionary({ bookUuid }: Props) {
     setLastDictionaryScope(nextScope)
     setScope(nextScope)
     setFilterOpen(false)
+  }
+
+  // Only this book's words can open here: the reader and audio are its own.
+  const openSavedWord = (entry: DictionaryEntry) => {
+    if (!bookUuid || entry.bookUuid !== bookUuid) return
+
+    dispatch(
+      bookmarkPressed({
+        bookUuid,
+        locator: entry.locator,
+        timestamp: Date.now(),
+        currentLocator: book?.position?.locator,
+      }),
+    )
+    router.dismiss()
   }
 
   // Back closes the filter sheet before it closes the navigation menu. Only while this
@@ -120,9 +142,15 @@ export function Dictionary({ bookUuid }: Props) {
           </Text>
         )}
         renderItem={({ item }) => (
-          <View className="bg-secondary mx-2 mb-2 rounded-lg px-4 py-3">
+          <Pressable
+            accessibilityLabel={`Open saved word ${item.word}`}
+            accessibilityRole="button"
+            className="bg-secondary mx-2 mb-2 rounded-lg px-4 py-3 active:opacity-70"
+            disabled={item.bookUuid !== bookUuid}
+            onPress={() => openSavedWord(item)}
+          >
             <Text className="text-lg">{item.word}</Text>
-          </View>
+          </Pressable>
         )}
       />
     )

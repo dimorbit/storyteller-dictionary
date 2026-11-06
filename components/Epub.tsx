@@ -35,7 +35,7 @@ import {
   useUpdateGlobalPreferenceMutation,
 } from "@/store/localApi"
 import { getCustomFontUrl } from "@/store/persistence/fonts"
-import { getIsPlaying } from "@/store/selectors/bookshelfSelectors"
+import { getIsPlaying, getJumpHold } from "@/store/selectors/bookshelfSelectors"
 import { getShouldKeepReaderAwake } from "@/store/selectors/sleepTimerSelectors"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
 import { type UUID } from "@/uuid"
@@ -211,6 +211,9 @@ export function Epub({ book, format, locator }: Props) {
   }, [])
 
   const isPlaying = useAppSelector(getIsPlaying)
+  // While a jump waits for the audio, the native view behaves as paused, so it
+  // does not schedule page turns toward where the audio still is.
+  const isJumpHeld = useAppSelector(getJumpHold)?.bookUuid === book.uuid
 
   const floatingToolbar = preferences?.floatingToolbar
 
@@ -420,7 +423,7 @@ export function Epub({ book, format, locator }: Props) {
               }),
             )
           }}
-          isPlaying={isPlaying}
+          isPlaying={isPlaying && !isJumpHeld}
         />
       </View>
       <MiniPlayer
