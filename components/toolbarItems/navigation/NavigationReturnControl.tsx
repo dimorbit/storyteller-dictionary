@@ -28,6 +28,7 @@ export function NavigationReturnControl({
       <Button
         accessibilityLabel="Back to previous position"
         className="h-9 flex-1 justify-start px-2"
+        hitSlop={{ top: 4, bottom: 4 }}
         onPress={() => {
           dispatch(
             returnToPreviousPosition({
@@ -51,7 +52,7 @@ export function NavigationReturnControl({
       <Button
         accessibilityLabel="Dismiss return to previous position"
         className="h-9 w-9"
-        hitSlop={12}
+        hitSlop={{ top: 4, bottom: 4, left: 12, right: 12 }}
         onPress={() => {
           dispatch(clearReturnPosition({ bookUuid }))
         }}
