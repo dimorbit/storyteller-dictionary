@@ -28,4 +28,6 @@ hold the first props emit until the native view reports that it is ready, or sto
 component for the footnote. Catching it in app code is not possible, because the rejected promise
 is created inside the wrapper.
 
+The footnote sheet no longer uses a DOM component. It renders with a plain `react-native-webview` WebView in `app/(root)/footnote.tsx`, so the footnote should no longer raise this banner. That change has not been run on a device yet. `components/BookDescription.tsx` is still a DOM component and goes through the same wrapper, so it can still raise the banner.
+
 Until then the banner is noise in development builds only. It does not affect readers.
