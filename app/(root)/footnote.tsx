@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react"
-import { View } from "react-native"
+import { useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Linking, View } from "react-native"
 import { WebView } from "react-native-webview"
 
 import {
@@ -52,6 +52,12 @@ export default function FootnoteScreen() {
     [footnoteContent, foreground, background],
   )
 
+  // A changed note loads again, so the flag starts over.
+  const pageStarted = useRef(false)
+  useLayoutEffect(() => {
+    pageStarted.current = false
+  }, [source])
+
   if (!footnoteContent) return null
 
   return (
@@ -74,7 +80,20 @@ export default function FootnoteScreen() {
           originWhitelist={["*"]}
           source={source}
           javaScriptEnabled
+          // Android only: keeps drags on the note from moving the sheet.
+          nestedScrollEnabled
           injectedJavaScript={measureScript}
+          onLoadStart={() => {
+            pageStarted.current = true
+          }}
+          onShouldStartLoadWithRequest={(request) => {
+            // The note's own HTML loads first. After that, requests are links.
+            if (!pageStarted.current) return true
+            if (/^https?:\/\//i.test(request.url)) {
+              void Linking.openURL(request.url).catch(() => {})
+            }
+            return false
+          }}
           onMessage={(event) => {
             const height = Number(event.nativeEvent.data)
             if (Number.isFinite(height)) setMeasuredHeight(height)
