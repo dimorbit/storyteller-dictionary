@@ -864,7 +864,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private suspend fun emitCurrentLocator() {
-        val currentLocator = navigator!!.currentLocator.value
+        val currentLocator = navigator?.currentLocator?.value ?: return
         val propLocator = props?.locator
         val isPropLocatorOnPage = propLocator?.locations?.fragments?.firstOrNull()?.let {
             val result = navigator?.evaluateJavascript(
@@ -881,7 +881,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             layoutBehavior().isProgressionVisible(this, currentLocator, it)
         } ?: false
 
-        val found = navigator!!.firstVisibleElementLocator()
+        // The navigator can be torn down while the JavaScript above is suspended.
+        val navigator = navigator ?: return
+        val found = navigator.firstVisibleElementLocator()
         if (found == null) {
             // If the locator specified by the prop is still on the page, don't emit
             // a change event. We haven't actually changed the page.
@@ -986,10 +988,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun go(locator: Locator, scrollAfterNavigation: Boolean = false) {
-        if (locator.href != navigator?.currentLocator?.value?.href) {
+        // Null when finalizeProps rebuilt the navigator but the publication did not load.
+        val navigator = navigator ?: return
+        if (locator.href != navigator.currentLocator.value.href) {
             changingResource = true
         }
-        navigator!!.go(locator, true)
+        navigator.go(locator, true)
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
         if (scrollAfterNavigation) {
             activity?.lifecycleScope?.launch {
