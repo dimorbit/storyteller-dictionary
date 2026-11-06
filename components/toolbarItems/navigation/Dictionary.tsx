@@ -1,6 +1,13 @@
+import { useFocusEffect } from "expo-router"
 import { Circle, CircleDot, Funnel } from "lucide-react-native"
-import { type ReactNode, useState } from "react"
-import { Pressable, ScrollView, SectionList, View } from "react-native"
+import { type ReactNode, useCallback, useState } from "react"
+import {
+  BackHandler,
+  Pressable,
+  ScrollView,
+  SectionList,
+  View,
+} from "react-native"
 
 import {
   type DictionaryScope,
@@ -58,6 +65,23 @@ export function Dictionary({ bookUuid }: Props) {
     setScope(nextScope)
     setFilterOpen(false)
   }
+
+  // Back closes the filter sheet before it closes the navigation menu. Only while this
+  // tab is focused, so a hidden sheet cannot take back from another tab.
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasBook || !filterOpen) return
+
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          setFilterOpen(false)
+          return true
+        },
+      )
+      return () => subscription.remove()
+    }, [hasBook, filterOpen]),
+  )
 
   let body: ReactNode
   if (isLoading) {
