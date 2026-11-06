@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.net.Uri
+import android.os.SystemClock
 import android.text.Html
 import android.util.Base64
 import android.util.Log
@@ -136,6 +137,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // Enough pending echoes to cover the reader sending them back late.
         private const val PENDING_LOCATOR_ECHO_LIMIT = 32
 
+        // A real echo comes back within a frame or two. Anything older is no longer one.
+        private const val PENDING_LOCATOR_ECHO_MAX_AGE_MS = 2000L
+
         // Runs of whitespace and punctuation in a quote become one space before two
         // quotes are compared, so a saved "hello," matches the bare word the chapter search
         // finds, and the web view's snippet agrees with the chapter text.
@@ -229,11 +233,15 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     var locationEmitter: Job? = null
 
     private var changingResource = false
+
+    private data class PendingLocatorEcho(val locator: Locator, val emittedAtMs: Long)
+
     // Locators this view emitted that the reader has not sent back yet, oldest first. The
     // reader sends each one back as the locator prop, sometimes after newer ones were
     // emitted, so such an echo is not a jump. Once it has come back it is dropped, so a
-    // later jump to the same place is not taken for an echo.
-    private val pendingLocatorEchoes = ArrayDeque<Locator>()
+    // later jump to the same place is not taken for an echo. Positions emitted during
+    // playback are not sent back at all, so they are dropped after a short while.
+    private val pendingLocatorEchoes = ArrayDeque<PendingLocatorEcho>()
     private var firstPageLoaded = CompletableDeferred<Unit>()
     private val scrollModeChapterNavigator = ScrollModeChapterNavigator()
 
@@ -347,15 +355,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private fun emitLocatorChange(locator: Locator) {
-        pendingLocatorEchoes.addLast(locator)
+        pendingLocatorEchoes.addLast(PendingLocatorEcho(locator, SystemClock.elapsedRealtime()))
         if (pendingLocatorEchoes.size > PENDING_LOCATOR_ECHO_LIMIT) pendingLocatorEchoes.removeFirst()
         onLocatorChange(locator.toJSON().toMap())
     }
 
     // Takes the pending locator that this locator echoes, if there is one. Older pending
-    // locators go with it, because the reader has already moved on past them.
+    // locators go with it, because the reader has already moved on past them. Stale ones
+    // are dropped first, so they can no longer match.
     private fun takeLocatorEcho(locator: Locator): Boolean {
-        val index = pendingLocatorEchoes.indexOfFirst { isSameLocatorPosition(locator, it) }
+        val now = SystemClock.elapsedRealtime()
+        pendingLocatorEchoes.removeAll { now - it.emittedAtMs > PENDING_LOCATOR_ECHO_MAX_AGE_MS }
+        val index = pendingLocatorEchoes.indexOfFirst { isSameLocatorPosition(locator, it.locator) }
         if (index < 0) return false
         repeat(index + 1) { pendingLocatorEchoes.removeFirst() }
         return true
