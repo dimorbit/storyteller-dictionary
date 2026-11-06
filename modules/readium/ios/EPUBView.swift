@@ -1207,7 +1207,7 @@ extension EPUBView: EPUBNavigatorDelegate {
         let jsFragmentsArray = javascriptStringArrayLiteral(fragments.map(\.fragmentId))
         let initialLocatorHref = javascriptStringLiteral(currentLocator.href.string)
 
-        let scriptSource = """
+        var scriptSource = """
             globalThis.storyteller = {};
             storyteller.doubleClickTimeout = null;
             storyteller.touchMoved = false;
@@ -1451,6 +1451,16 @@ extension EPUBView: EPUBNavigatorDelegate {
             document.body.firstElementChild.style.paddingLeft = "var(--st-padding-left)";
             document.body.firstElementChild.style.paddingRight = "var(--st-padding-right)";
         """
+
+        if traitCollection.userInterfaceIdiom == .phone {
+            scriptSource += """
+
+                const wideReadingColumns = document.createElement("style");
+                wideReadingColumns.textContent = "@media screen and (min-width: 35em){html:root{--RS__colWidth:20em;--RS__colCount:2;}}";
+                document.head.appendChild(wideReadingColumns);
+
+                """
+        }
 
         userContentController.addUserScript(WKUserScript(source: scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         userContentController.add(self, name: "storytellerDoubleClick")
