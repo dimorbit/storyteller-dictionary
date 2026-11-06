@@ -25,11 +25,15 @@ already sent it back, so a deliberate jump to that place was taken for an echo a
 position now counts as an echo only while it is pending, and leaves the list as soon as it comes
 back.
 
-One case is still open. Positions reported while the audiobook is playing never come back as
-echoes, so they stay pending. A bookmark jump to one of those exact places, before any newer
-echo arrives, is still swallowed. The fix for it needs care: the native playing flag lags the
-JavaScript one at the moment of a pause, so gating on it could make the reader scroll to its own
-echo, which is worse than the gap.
+One case used to be open. Positions reported while the audiobook is playing never come back as
+echoes, so they stayed pending, and a bookmark jump to one of those exact places was swallowed.
+Pending positions now carry the time they were emitted and stop counting as echoes after two
+seconds. A real echo comes back within a frame or two, so echo suppression is unchanged, and a
+position reported during playback no longer blocks a later jump to it.
+
+The remaining risk is the other way round: if the JavaScript side stalls for more than two
+seconds before an echo returns, the reader could scroll once to a place it just reported. Two
+seconds is a single constant, `PENDING_LOCATOR_ECHO_MAX_AGE_MS`, if that ever needs raising.
 
 ## Checked on the emulator
 
@@ -46,3 +50,8 @@ echo, which is worse than the gap.
   opened on the word itself, "impressively muscled." at the top of the page, chapter 1, page 1 of
   12 at 5%, with the wider dot spacing at that copy. So the saved word jump does scroll in scroll
   layout, not only in page layout.
+- With the saved words filter sheet open, one Android back press closed the sheet and left the
+  navigation menu on the Dictionary tab, instead of closing the menu and landing on Contents.
+- After the echo expiry change: a bookmark made in scroll layout at page 4 of 12, three swipes
+  away to page 6, then a tap on that bookmark, put the page back at page 4 with the same text at
+  the top. Slow scrolling afterwards followed the finger and did not jump back.
