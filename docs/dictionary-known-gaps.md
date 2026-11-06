@@ -42,7 +42,7 @@ echo, which is worse than the gap.
 - A bookmark made in scroll layout, then a short scroll away, then a tap on that bookmark: the
   page came back to the bookmarked place, page 8 of 10 at 12%, and then kept following the
   finger without snapping back.
-
-## Not verified on a device
-
-- That the same-clip jump scrolls in paused scroll mode.
+- A saved word tapped on the book details screen while that book was in scroll layout: the reader
+  opened on the word itself, "impressively muscled." at the top of the page, chapter 1, page 1 of
+  12 at 5%, with the wider dot spacing at that copy. So the saved word jump does scroll in scroll
+  layout, not only in page layout.
