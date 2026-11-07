@@ -984,20 +984,44 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val clipId = runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
             ?: return locator
 
-        return locator.copy(locations = locator.locations.copy(fragments = listOf(clipId)))
+        return locator.copy(
+            locations = locator.locations.copy(
+                otherLocations = locator.locations.otherLocations + (BookService.CLIP_ID_LOCATION_KEY to clipId)
+            )
+        )
     }
 
     fun go(locator: Locator, scrollAfterNavigation: Boolean = false) {
         // Null when finalizeProps rebuilt the navigator but the publication did not load.
         val navigator = navigator ?: return
+        val fragment = locator.locations.fragments.firstOrNull()
+        val bookUuid = props?.bookUuid
+        // Older selections put the clip ID in fragments rather than metadata.
+        val navigationLocator = if (
+            fragment != null &&
+            !locator.text.highlight.isNullOrBlank() &&
+            locator.locations.otherLocations[BookService.CLIP_ID_LOCATION_KEY] !is String &&
+            bookUuid != null &&
+            BookService.getFragments(bookUuid, locator).any { it.fragmentId == fragment }
+        ) {
+            locator.copy(
+                locations = locator.locations.copy(
+                    fragments = locator.locations.fragments.drop(1),
+                    otherLocations = locator.locations.otherLocations +
+                        (BookService.CLIP_ID_LOCATION_KEY to fragment)
+                )
+            )
+        } else {
+            locator
+        }
         if (locator.href != navigator.currentLocator.value.href) {
             changingResource = true
         }
-        navigator.go(locator, true)
+        navigator.go(navigationLocator, true)
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
         if (scrollAfterNavigation) {
             activity?.lifecycleScope?.launch {
-                scrollFragmentIntoView(locator)
+                scrollFragmentIntoView(navigationLocator)
             }
         }
     }

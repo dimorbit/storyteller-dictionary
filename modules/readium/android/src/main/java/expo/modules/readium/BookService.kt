@@ -39,6 +39,7 @@ import java.net.URL
 import java.util.zip.ZipFile
 
 object BookService {
+    const val CLIP_ID_LOCATION_KEY = "storytellerClipId"
 
     /** Returns the resource data as an XML Document at the given [url], or null. */
     @OptIn(InternalReadiumApi::class)
@@ -110,11 +111,12 @@ object BookService {
     fun getClip(bookUuid: String, locator: Locator): OverlayPar? {
         val clips = this.clips[bookUuid] ?: return null
 
-        val fragment = try {
-            locator.locations.fragments.first()
-        } catch (_: Exception) {
-            return null
-        }
+        val fragment = locator.locations.otherLocations[CLIP_ID_LOCATION_KEY] as? String
+            ?: try {
+                locator.locations.fragments.first()
+            } catch (_: Exception) {
+                return null
+            }
 
         return clips.first { Url.fromEpubHref(it.textResource) == locator.href && it.fragmentId == fragment }
     }

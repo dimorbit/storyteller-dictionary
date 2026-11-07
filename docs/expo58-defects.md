@@ -95,9 +95,9 @@ custom-font regression to repair.
 
 ## 3. Saved-word jump is one screen too low
 
-**Classification: unconfirmed; a fork/upstream scroll interaction is a
-plausible cause.** The source establishes competing positioning requests, not
-which request produced the reported offset.
+**Classification: ours (fork).** The fork added an audio clip ID to the saved
+word's fragments, causing scroll navigation to center the clip rather than the
+word.
 
 `Dictionary.tsx` dispatches `bookmarkPressed` with the saved locator. The
 listener in `store/listeners/syncListeners.ts` saves that locator and seeks
@@ -110,12 +110,12 @@ calculate a screen offset. The return bar is absolutely positioned in
 `components/Epub.tsx`, outside the reader's flex layout. That supports the
 reported zero-pixel layout shift, though the bar can cover part of the page.
 
-One concrete interaction merits checking in **scroll mode**:
+In **scroll mode**, the cause is:
 
 1. Fork commit `bf9f87d` added `locatorWithClip`: when a clip can be found, a
-   selected word retains its text locator but gains an audio clip ID in
-   `locations.fragments`. Upstream `c3e246d` does not add that clip ID to the
-   selection.
+   selected word retains its text locator but its fragments are replaced with
+   the audio clip ID. Upstream `c3e246d` does not add that clip ID to the
+   selection. `BookService.getClip` uses the ID to find the matching audio.
 2. The shared `EpubView.go` calls Readium's `navigator.go` and separately
    launches `scrollFragmentIntoView`. The latter centers the whole element for
    the first fragment ID, not the selected word. The fragment-centering logic
@@ -123,11 +123,8 @@ One concrete interaction merits checking in **scroll mode**:
 3. Readium 3.1.2's
    [`R2EpubPageFragment`](https://github.com/readium/kotlin-toolkit/blob/3.1.2/readium/navigator/src/main/java/org/readium/r2/navigator/pager/R2EpubPageFragment.kt)
    tries a text highlight first, then an HTML ID, then progression. The
-   separate fragment scroll is not synchronized with completion of that
-   locator navigation. If it wins and the clip element is sufficiently tall
-   or misplaced, it can move the selected text out of view. We do not have the
-   actual locator, clip-element geometry, scroll mode, or timing from the
-   reported run, so this is not a proven explanation of the one-screen offset.
+   separate fragment scroll can override that position by centering the clip
+   block, pushing the word above the screen and explaining the reported offset.
 
 The Android `EpubView.kt`, `EpubFragment.kt`, native module, and JS Readium
 bridge are byte-identical between `101b36b` and `4bed2da`; both use Readium
@@ -140,13 +137,14 @@ the **book details screen**. That check predates the later jump-hold/overlay
 commits and is not a test of the current Dictionary-tab path. It would be
 wrong to claim either that the offset always existed or that Expo 58 caused it.
 
-**Left unchanged.** If the competing scrolls are confirmed as the cause,
-upstream's shared scroll behavior would need to preserve a precise text target
-and coordinate it with any clip-centered scrolling; the fork must still retain
-the clip ID for audio seeking. Simply disabling all fragment scrolling would
-also disable the active-playback follow behavior. Compare the affected saved
-locator and book on `main` and this branch, in scroll mode with playback both
-paused and playing, before choosing a fix.
+**Fixed in the fork.** New selections keep their original fragments and store
+the clip ID in `otherLocations` (`locations.storytellerClipId` in JSON).
+`BookService.getClip` reads that ID first and falls back to the first fragment.
+At navigation time, older saved locators without clip metadata, but with a text
+quote and a first fragment matching a clip in the same resource, are copied
+with that fragment moved into the metadata; stored words are not migrated.
+Genuine fragments and active-playback centering are left unchanged. Old and new
+saved-word jumps, audio seeking, and playback follow still need a device check.
 
 ## Verification limits
 
@@ -154,5 +152,5 @@ This investigation used source, Git history, the locked package sources, and
 the versioned Readium documentation. No packages were installed; no Gradle,
 typecheck, lint, emulator, or device run was performed. `node_modules` is absent
 here, so the repository's Vitest suite was not available without installation.
-The observed font, view lifecycle, jump geometry, and any proposed remedy have
+The observed font, view lifecycle, jump geometry, and the jump fix have
 not been verified in a running app.
