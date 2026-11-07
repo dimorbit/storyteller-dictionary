@@ -1,15 +1,10 @@
-import { useGlobalSearchParams } from "expo-router"
 import { View } from "react-native"
 
 import { Dictionary } from "@/components/toolbarItems/navigation/Dictionary"
-import { type UUID } from "@/uuid"
-
-type NavigationMenuParams = {
-  uuid?: UUID
-}
+import { useNavigationMenuParams } from "@/components/toolbarItems/navigation/useNavigationMenuParams"
 
 export default function DictionaryScreen() {
-  const { uuid } = useGlobalSearchParams<NavigationMenuParams>()
+  const { uuid } = useNavigationMenuParams()
 
   return (
     <View className="bg-background flex-1">

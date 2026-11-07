@@ -1,4 +1,5 @@
-import { Tabs, router, useGlobalSearchParams, usePathname } from "expo-router"
+import { useNavigationMenuParams } from "@/components/toolbarItems/navigation/useNavigationMenuParams"
+import { Tabs, router, usePathname } from "expo-router"
 import { BookA, Bookmark, Highlighter, ListTree } from "lucide-react-native"
 import { useEffect } from "react"
 import { View } from "react-native"
@@ -25,7 +26,7 @@ type NavigationMenuParams = {
 }
 
 export default function NavigationMenuLayout() {
-  const params = useGlobalSearchParams<NavigationMenuParams>()
+  const { uuid: bookUuid } = useNavigationMenuParams()
   const pathname = usePathname()
   const height = useReaderFormSheetHeight()
   const bottomInset = useReaderFormSheetBottomInset()
@@ -61,7 +62,7 @@ export default function NavigationMenuLayout() {
         <View className="bg-muted-foreground/40 h-1 w-12 rounded-full" />
       </View>
       <NavigationReturnControl
-        bookUuid={params.uuid}
+        bookUuid={bookUuid}
         onReturn={() => router.dismiss()}
       />
       <View className="flex-1">

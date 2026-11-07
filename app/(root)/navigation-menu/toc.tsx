@@ -1,4 +1,5 @@
-import { router, useGlobalSearchParams } from "expo-router"
+import { useNavigationMenuParams } from "@/components/toolbarItems/navigation/useNavigationMenuParams"
+import { router } from "expo-router"
 import { View } from "react-native"
 
 import { TableOfContents } from "@/components/toolbarItems/navigation/TableOfContents"
@@ -12,7 +13,7 @@ type NavigationMenuParams = {
 }
 
 export default function ContentsScreen() {
-  const { uuid, format, mode } = useGlobalSearchParams<NavigationMenuParams>()
+  const { uuid, format, mode } = useNavigationMenuParams()
 
   return (
     <View className="bg-background flex-1">

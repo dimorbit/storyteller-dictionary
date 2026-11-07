@@ -1,4 +1,5 @@
-import { router, useGlobalSearchParams } from "expo-router"
+import { useNavigationMenuParams } from "@/components/toolbarItems/navigation/useNavigationMenuParams"
+import { router } from "expo-router"
 import { View } from "react-native"
 
 import { Highlights } from "@/components/toolbarItems/navigation/Highlights"
@@ -10,7 +11,7 @@ type NavigationMenuParams = {
 }
 
 export default function HighlightsScreen() {
-  const { uuid, format } = useGlobalSearchParams<NavigationMenuParams>()
+  const { uuid, format } = useNavigationMenuParams()
 
   return (
     <View className="bg-background flex-1">
