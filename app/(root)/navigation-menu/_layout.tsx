@@ -26,7 +26,7 @@ type NavigationMenuParams = {
 }
 
 export default function NavigationMenuLayout() {
-  const { uuid: bookUuid } = useNavigationMenuParams()
+  const params = useNavigationMenuParams()
   const pathname = usePathname()
   const height = useReaderFormSheetHeight()
   const bottomInset = useReaderFormSheetBottomInset()
@@ -62,7 +62,7 @@ export default function NavigationMenuLayout() {
         <View className="bg-muted-foreground/40 h-1 w-12 rounded-full" />
       </View>
       <NavigationReturnControl
-        bookUuid={bookUuid}
+        bookUuid={params.uuid}
         onReturn={() => router.dismiss()}
       />
       <View className="flex-1">
