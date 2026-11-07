@@ -146,11 +146,19 @@ with that fragment moved into the metadata; stored words are not migrated.
 Genuine fragments and active-playback centering are left unchanged. Old and new
 saved-word jumps, audio seeking, and playback follow still need a device check.
 
+The Android scroll-mode jump now leaves room for the return bar: React passes
+its 40 logical pixels to the reader, which re-aligns the target and scrolls
+back by that amount after Readium reports the destination. The overlay still
+does not resize the page, and active-playback centering is untouched. At the
+start of a resource, scrolling may clamp before the full inset is available;
+the landing needs a device check.
+
 ## Verification limits
 
 This investigation used source, Git history, the locked package sources, and
 the versioned Readium documentation. No packages were installed; no Gradle,
 typecheck, lint, emulator, or device run was performed. `node_modules` is absent
 here, so the repository's Vitest suite was not available without installation.
-The observed font, view lifecycle, jump geometry, and the jump fix have
-not been verified in a running app.
+The user confirmed the earlier saved-word landing and audio seek on an
+emulator. The return-bar inset, observed font, and view lifecycle have not
+been verified in a running app here.

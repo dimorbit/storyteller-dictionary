@@ -86,7 +86,8 @@ data class Props(
     var textAlign: TextAlign?,
     var marginLeft: Int?,
     var marginRight: Int?,
-    var scrollMode: Boolean?
+    var scrollMode: Boolean?,
+    var jumpTopInset: Double?
 )
 
 
@@ -110,7 +111,8 @@ data class FinalizedProps(
     var textAlign: TextAlign,
     var marginLeft: Int,
     var marginRight: Int,
-    var scrollMode: Boolean
+    var scrollMode: Boolean,
+    var jumpTopInset: Double
 )
 
 
@@ -235,6 +237,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     private var changingResource = false
 
     private data class PendingLocatorEcho(val locator: Locator, val emittedAtMs: Long)
+    private data class PendingJumpInset(val locator: Locator, val inset: Double)
+    private var pendingJumpInset: PendingJumpInset? = null
 
     // Locators this view emitted that the reader has not sent back yet, oldest first. The
     // reader sends each one back as the locator prop, sometimes after newer ones were
@@ -268,7 +272,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         textAlign = null,
         marginLeft = null,
         marginRight = null,
-        scrollMode = null
+        scrollMode = null,
+        jumpTopInset = null
     )
     var props: FinalizedProps? = null
 
@@ -639,10 +644,19 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 textAlign = pendingProps.textAlign ?: oldProps?.textAlign ?: TextAlign.JUSTIFY,
                 marginLeft = pendingProps.marginLeft ?: oldProps?.marginLeft ?: 0,
                 marginRight = pendingProps.marginRight ?: oldProps?.marginRight ?: 0,
-                scrollMode = pendingProps.scrollMode ?: oldProps?.scrollMode ?: false
+                scrollMode = pendingProps.scrollMode ?: oldProps?.scrollMode ?: false,
+                jumpTopInset = pendingProps.jumpTopInset ?: oldProps?.jumpTopInset ?: 0.0
             )
 
         props = finalProps
+        if (finalProps.isPlaying || finalProps.jumpTopInset <= 0.0) {
+            pendingJumpInset = null
+        }
+        // Changing the overlay alone must not run navigation or playback follow.
+        if (oldProps != null && finalProps.jumpTopInset != oldProps.jumpTopInset &&
+            finalProps.copy(jumpTopInset = oldProps.jumpTopInset) == oldProps
+        ) return
+
         val scrollModeChanged = oldProps?.let { finalProps.scrollMode != it.scrollMode } ?: false
         val customFontsChanged = finalProps.customFonts != oldProps?.customFonts
         val fontFamilyChanged = finalProps.fontFamily != oldProps?.fontFamily
@@ -820,6 +834,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun destroyNavigator() {
+        pendingJumpInset = null
         locationEmitter?.cancel()
         locationEmitter = null
 
@@ -1016,6 +1031,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
         if (locator.href != navigator.currentLocator.value.href) {
             changingResource = true
+        }
+        val inset = props?.jumpTopInset ?: 0.0
+        pendingJumpInset = if (scrollAfterNavigation && props?.isPlaying == false && inset > 0.0) {
+            PendingJumpInset(navigationLocator, inset)
+        } else {
+            null
         }
         navigator.go(navigationLocator, true)
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
@@ -1929,6 +1950,29 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
+        val jump = pendingJumpInset
+        if (jump != null && locator.href == jump.locator.href) {
+            pendingJumpInset = null
+            activity?.lifecycleScope?.launch {
+                if (props?.isPlaying != false || props?.jumpTopInset != jump.inset) return@launch
+                val alignText = if (
+                    !jump.locator.text.highlight.isNullOrBlank() &&
+                    jump.locator.locations.fragments.isEmpty()
+                ) {
+                    "readium.scrollToLocator(${jump.locator.toJSON()});"
+                } else ""
+                navigator?.evaluateJavascript(
+                    """
+                    (function() {
+                        $alignText
+                        const scroller = document.scrollingElement || document.documentElement;
+                        scroller.scrollTop = Math.max(0, scroller.scrollTop - ${jump.inset});
+                    })();
+                    """.trimIndent()
+                )
+            }
+        }
+
         // Readium calls this whenever it recomputes the current page, not only when the
         // page actually turns, so the index is compared first. Otherwise a tap that only
         // opens the dictionary menu would drop the mark it just set.

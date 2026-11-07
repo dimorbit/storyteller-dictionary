@@ -5,6 +5,7 @@ import { useVerticalBarEdgeIOS } from "expo-status-bar"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   DeviceEventEmitter,
+  Platform,
   StatusBar,
   TouchableOpacity,
   View,
@@ -37,7 +38,11 @@ import {
   useUpdateGlobalPreferenceMutation,
 } from "@/store/localApi"
 import { getCustomFontUrl } from "@/store/persistence/fonts"
-import { getIsPlaying, getJumpHold } from "@/store/selectors/bookshelfSelectors"
+import {
+  getIsPlaying,
+  getJumpHold,
+  getReturnToPosition,
+} from "@/store/selectors/bookshelfSelectors"
 import { getShouldKeepReaderAwake } from "@/store/selectors/sleepTimerSelectors"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
 import { type UUID } from "@/uuid"
@@ -62,6 +67,7 @@ const forwardNavKeyCodes = [93, 117]
 const backwardNavKeyCodes = [92]
 
 const barRowHeight = 52
+const navigationReturnHeight = 40 // NavigationReturnControl's h-10
 
 function EpubKeepAwake() {
   useKeepAwake()
@@ -226,6 +232,9 @@ export function Epub({ book, format, locator }: Props) {
   }, [])
 
   const isPlaying = useAppSelector(getIsPlaying)
+  const returnPosition = useAppSelector((state) =>
+    getReturnToPosition(state, book.uuid),
+  )
   // While a jump waits for the audio, the native view behaves as paused, so it
   // does not schedule page turns toward where the audio still is.
   const isJumpHeld = useAppSelector(getJumpHold)?.bookUuid === book.uuid
@@ -368,6 +377,13 @@ export function Epub({ book, format, locator }: Props) {
           style={{ flex: 1 }}
           bookUuid={book.uuid}
           locator={locator}
+          jumpTopInset={
+            Platform.OS === "android" &&
+            returnPosition &&
+            preferences?.showReaderUi
+              ? navigationReturnHeight
+              : 0
+          }
           highlights={highlights ?? []}
           dictionaryEntries={(dictionaryEntries ?? []).map(
             ({ uuid, word, bookUuid, locator }) => ({

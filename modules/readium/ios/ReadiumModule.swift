@@ -305,6 +305,9 @@ public class ReadiumModule: Module {
                 view.pendingProps.scrollMode = prop ?? false
             }
 
+            // The jump inset is currently Android-only.
+            Prop("jumpTopInset") { (_: EPUBView, _: Double?) in }
+
             Prop("fontScale") { (view: EPUBView, prop: Double) in
                 view.pendingProps.fontSize = prop
             }

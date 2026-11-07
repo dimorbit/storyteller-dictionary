@@ -349,6 +349,10 @@ class ReadiumModule : Module(), Listener {
                 view.pendingProps.scrollMode = prop ?: false
             }
 
+            Prop("jumpTopInset") { view: EpubView, prop: Double? ->
+                view.pendingProps.jumpTopInset = prop ?: 0.0
+            }
+
             Prop("fontScale") { view: EpubView, prop: Double ->
                 view.pendingProps.fontSize = prop
             }

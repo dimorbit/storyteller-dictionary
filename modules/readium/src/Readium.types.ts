@@ -265,6 +265,7 @@ export type EPUBViewProps = {
   readaloudColor?: string | undefined
   readaloudDecoratorStyle?: ReadaloudDecoratorStyle | undefined
   scrollMode?: boolean | undefined
+  jumpTopInset?: number | undefined
   customFonts?: CustomFont[] | undefined
   marginLeft?: number | undefined
   marginRight?: number | undefined
