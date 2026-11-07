@@ -147,11 +147,13 @@ Genuine fragments and active-playback centering are left unchanged. Old and new
 saved-word jumps, audio seeking, and playback follow still need a device check.
 
 The Android scroll-mode jump now leaves room for the return bar: React passes
-its 40 logical pixels to the reader, which re-aligns the target and scrolls
+a 48-logical-pixel inset to the reader, which re-aligns the target and scrolls
 back by that amount after Readium reports the destination. The overlay still
 does not resize the page, and active-playback centering is untouched. At the
 start of a resource, scrolling may clamp before the full inset is available;
-the landing needs a device check.
+the landing needs a device check. When a reader sheet is open, only the reader
+overlay is hidden; the navigation sheet keeps its own control and the inset
+keeps its extra 8 logical pixels of breathing room.
 
 ## Verification limits
 

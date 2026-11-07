@@ -61,6 +61,7 @@ type Props = {
   book: BookWithRelations
   format: "readaloud" | "ebook"
   locator: ReadiumLocator
+  isReaderSheetOpen: boolean
 }
 
 const forwardNavKeyCodes = [93, 117]
@@ -68,13 +69,14 @@ const backwardNavKeyCodes = [92]
 
 const barRowHeight = 52
 const navigationReturnHeight = 40 // NavigationReturnControl's h-10
+const navigationReturnJumpPadding = 8
 
 function EpubKeepAwake() {
   useKeepAwake()
   return null
 }
 
-export function Epub({ book, format, locator }: Props) {
+export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const shouldKeepAwake = useAppSelector(getShouldKeepReaderAwake)
 
   const { foreground, background } = useColorTheme()
@@ -328,7 +330,7 @@ export function Epub({ book, format, locator }: Props) {
       )}
       {/* Overlays the page top so showing it never resizes the reader. Stays
           before SelectionMenu so its backdrop (also z-2) sits above the bar. */}
-      {toolbarHeight > 0 && (
+      {toolbarHeight > 0 && !isReaderSheetOpen && (
         <HideableView
           hidden={!preferences?.showReaderUi}
           className="absolute right-0 left-0 z-2"
@@ -381,7 +383,7 @@ export function Epub({ book, format, locator }: Props) {
             Platform.OS === "android" &&
             returnPosition &&
             preferences?.showReaderUi
-              ? navigationReturnHeight
+              ? navigationReturnHeight + navigationReturnJumpPadding
               : 0
           }
           highlights={highlights ?? []}

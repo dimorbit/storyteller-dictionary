@@ -72,7 +72,13 @@ export default function BookScreen() {
       {!showEpub || !book || !locator ? (
         <LoadingView />
       ) : (
-        <Epub key={book.uuid} format={format} book={book} locator={locator} />
+        <Epub
+          key={book.uuid}
+          format={format}
+          book={book}
+          locator={locator}
+          isReaderSheetOpen={isReaderSheetOpen}
+        />
       )}
     </>
   )
