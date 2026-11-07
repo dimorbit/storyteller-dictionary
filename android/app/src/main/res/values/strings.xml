@@ -1,7 +1,7 @@
 <resources>
   <string name="app_name">Storyteller</string>
   <string name="expo_system_ui_user_interface_style" translatable="false">automatic</string>
-  <string name="expo_runtime_version">2.11.13</string>
+  <string name="expo_runtime_version">2.12.0</string>
   <string name="empty"/>
   <string name="audioPlaybackAttribution">This app plays audio</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
