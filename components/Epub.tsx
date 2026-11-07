@@ -37,7 +37,7 @@ import {
   useUpdateGlobalPreferenceMutation,
 } from "@/store/localApi"
 import { getCustomFontUrl } from "@/store/persistence/fonts"
-import { getIsPlaying } from "@/store/selectors/bookshelfSelectors"
+import { getIsPlaying, getJumpHold } from "@/store/selectors/bookshelfSelectors"
 import { getShouldKeepReaderAwake } from "@/store/selectors/sleepTimerSelectors"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
 import { type UUID } from "@/uuid"
@@ -48,6 +48,7 @@ import { LoadingView } from "./LoadingView"
 import { MiniPlayer } from "./MiniPlayer"
 import { SelectionMenu } from "./SelectionMenu"
 import { Toolbar } from "./Toolbar"
+import { NavigationReturnControl } from "./toolbarItems/navigation/NavigationReturnControl"
 import { Group } from "./ui/Group"
 import { HideableView } from "./ui/HideableView"
 
@@ -225,6 +226,9 @@ export function Epub({ book, format, locator }: Props) {
   }, [])
 
   const isPlaying = useAppSelector(getIsPlaying)
+  // While a jump waits for the audio, the native view behaves as paused, so it
+  // does not schedule page turns toward where the audio still is.
+  const isJumpHeld = useAppSelector(getJumpHold)?.bookUuid === book.uuid
 
   const floatingToolbar = preferences?.floatingToolbar
 
@@ -311,6 +315,17 @@ export function Epub({ book, format, locator }: Props) {
             <BackButton />
             <Toolbar mode="text" activeBookmarks={activeBookmarks} />
           </Group>
+        </HideableView>
+      )}
+      {/* Overlays the page top so showing it never resizes the reader. Stays
+          before SelectionMenu so its backdrop (also z-2) sits above the bar. */}
+      {toolbarHeight > 0 && (
+        <HideableView
+          hidden={!preferences?.showReaderUi}
+          className="absolute right-0 left-0 z-2"
+          style={{ top: toolbarHeight }}
+        >
+          <NavigationReturnControl bookUuid={book.uuid} />
         </HideableView>
       )}
       {selection && (
@@ -463,7 +478,7 @@ export function Epub({ book, format, locator }: Props) {
               }),
             )
           }}
-          isPlaying={isPlaying}
+          isPlaying={isPlaying && !isJumpHeld}
         />
       </View>
       <MiniPlayer

@@ -105,6 +105,9 @@ export default function BookDetailsScreen() {
   const openSavedWord = async (entry: DictionaryEntry) => {
     if (!readerFormat) return
 
+    // Read before the saved place moves, so the reader can offer a way back.
+    const previousLocator = book?.position?.locator
+
     await updatePosition({
       bookUuid: uuid,
       locator: entry.locator,
@@ -122,6 +125,7 @@ export default function BookDetailsScreen() {
         bookUuid: uuid,
         locator: entry.locator,
         timestamp: Date.now(),
+        currentLocator: previousLocator,
       }),
     )
 
