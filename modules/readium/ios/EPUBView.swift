@@ -811,9 +811,20 @@ class EPUBView: ExpoView {
                     navigator.currentLocation?.href.isEquivalentTo(locator.href) == true &&
                     self.props?.isPlaying == false && self.props?.scrollMode == true
             }
-            func measure(_ barBottom: Double) async -> Bool {
+            let scrollTolerance = 2
+            let landingResult = await navigator.evaluateJavaScript(
+                "(document.scrollingElement || document.documentElement).scrollTop"
+            )
+            guard case .success(let landingValue) = landingResult,
+                  let landingTop = (landingValue as? NSNumber)?.doubleValue, landingTop.isFinite else { return }
+            // Advance this only by our own corrections, not tolerated reader movement.
+            var expectedTop = landingTop
+
+            func measure(_ barBottom: Double, expectedTop: Double) async -> (moved: Bool, top: Double?) {
                 let result = await navigator.evaluateJavaScript("""
                     (function() {
+                        const scroller = document.scrollingElement || document.documentElement;
+                        if (Math.abs(scroller.scrollTop - \(expectedTop)) > \(scrollTolerance)) return { moved: true };
                         const locator = \(locatorJson);
                         const body = document.body;
                         const normalize = (text) => text.replace(/\\s+/g, ' ').trim();
@@ -919,7 +930,8 @@ class EPUBView: ExpoView {
                             ? Math.max(0, Math.min(preferred, (rect.top - previousBottom) / 2))
                             : preferred;
                         const target = \(barBottom) + clearance;
-                        const scroller = document.scrollingElement || document.documentElement;
+                        const initialTop = scroller.scrollTop;
+                        if (Math.abs(initialTop - \(expectedTop)) > \(scrollTolerance)) return { moved: true };
                         const behavior = scroller.style.getPropertyValue('scroll-behavior');
                         const priority = scroller.style.getPropertyPriority('scroll-behavior');
                         scroller.style.setProperty('scroll-behavior', 'auto', 'important');
@@ -941,30 +953,35 @@ class EPUBView: ExpoView {
                                 }
                                 scroller.scrollTop = Math.max(0, nextTop);
                             }
-                            return true;
+                            return { expectedTop: \(expectedTop) + scroller.scrollTop - initialTop };
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');
                         }
                     })()
                     """)
-                if case .success(let value) = result { return (value as? Bool) ?? false }
-                return false
+                if case .success(let value) = result, let outcome = value as? [String: Any] {
+                    let top = (outcome["expectedTop"] as? NSNumber)?.doubleValue
+                    return (outcome["moved"] as? Bool ?? false, top?.isFinite == true ? top : nil)
+                }
+                return (false, nil)
             }
 
             try? await Task.sleep(nanoseconds: 32_000_000)
             for _ in 0..<20 {
                 guard isCurrent() else { return }
                 if let barBottom = self.props?.jumpBarBottom, barBottom > 0 {
-                    let measured = await measure(barBottom)
-                    guard isCurrent() else { return }
-                    if measured {
+                    let measured = await measure(barBottom, expectedTop: expectedTop)
+                    guard isCurrent(), !measured.moved else { return }
+                    if let measuredTop = measured.top {
+                        expectedTop = measuredTop
                         for _ in 0..<2 {
                             try? await Task.sleep(nanoseconds: 50_000_000)
                             guard isCurrent(), let currentBottom = self.props?.jumpBarBottom,
                                   currentBottom > 0 else { return }
-                            _ = await measure(currentBottom)
-                            guard isCurrent() else { return }
+                            let rechecked = await measure(currentBottom, expectedTop: expectedTop)
+                            guard isCurrent(), !rechecked.moved else { return }
+                            if let recheckedTop = rechecked.top { expectedTop = recheckedTop }
                         }
                         return
                     }
@@ -977,6 +994,7 @@ class EPUBView: ExpoView {
                 (function() {
                     const scroller = document.scrollingElement || document.documentElement;
                     const initialTop = scroller.scrollTop;
+                    if (Math.abs(initialTop - \(landingTop)) > \(scrollTolerance)) return null;
                     const move = \(barBottom) + 2;
                     if (document.body && initialTop < move) {
                         const padding = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
@@ -987,7 +1005,10 @@ class EPUBView: ExpoView {
                     scroller.style.setProperty('scroll-behavior', 'auto', 'important');
                     try {
                         scroller.scrollTop = Math.max(0, initialTop - move);
-                        return scroller.scrollTop;
+                        return {
+                            top: scroller.scrollTop,
+                            expectedTop: \(landingTop) + scroller.scrollTop - initialTop
+                        };
                     } finally {
                         if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                         else scroller.style.removeProperty('scroll-behavior');
@@ -995,12 +1016,16 @@ class EPUBView: ExpoView {
                 })()
                 """)
             guard isCurrent(), case .success(let value) = result,
-                  let fallbackTop = (value as? NSNumber)?.doubleValue, fallbackTop.isFinite else { return }
+                  let fallback = value as? [String: Any],
+                  let fallbackTop = (fallback["top"] as? NSNumber)?.doubleValue,
+                  let expectedFallbackTop = (fallback["expectedTop"] as? NSNumber)?.doubleValue,
+                  fallbackTop.isFinite, expectedFallbackTop.isFinite else { return }
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard isCurrent(), (self.props?.jumpBarBottom ?? 0) > 0 else { return }
             _ = await navigator.evaluateJavaScript("""
                 (function() {
                     const scroller = document.scrollingElement || document.documentElement;
+                    if (Math.abs(scroller.scrollTop - \(expectedFallbackTop)) > \(scrollTolerance)) return;
                     if (Math.abs(scroller.scrollTop - \(fallbackTop)) <= 1) return;
                     const behavior = scroller.style.getPropertyValue('scroll-behavior');
                     const priority = scroller.style.getPropertyPriority('scroll-behavior');

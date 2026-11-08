@@ -1973,11 +1973,23 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 isActive && navigator === nav && nav.currentLocator.value.href == jump.href &&
                     props?.isPlaying == false && props?.scrollMode == true
 
-            delay(32L)
-            suspend fun measure(barBottom: Double): Boolean = runCatching {
+            val scrollTolerance = 2
+            val landingTop = runCatching {
                 nav.evaluateJavascript(
+                    "(document.scrollingElement || document.documentElement).scrollTop"
+                )?.toDoubleOrNull()
+            }.getOrNull() ?: return@launch
+            if (!landingTop.isFinite()) return@launch
+            // Advance this only by our own corrections, not tolerated reader movement.
+            var expectedTop = landingTop
+
+            delay(32L)
+            suspend fun measure(barBottom: Double, expectedTop: Double): Pair<Boolean, Double?> = runCatching {
+                val result = nav.evaluateJavascript(
                     """
                     (function() {
+                        const scroller = document.scrollingElement || document.documentElement;
+                        if (Math.abs(scroller.scrollTop - $expectedTop) > $scrollTolerance) return { moved: true };
                         const locator = ${jump.toJSON()};
                         const body = document.body;
                         const normalize = (text) => text.replace(/\s+/g, ' ').trim();
@@ -2083,7 +2095,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                             ? Math.max(0, Math.min(preferred, (rect.top - previousBottom) / 2))
                             : preferred;
                         const target = $barBottom + clearance;
-                        const scroller = document.scrollingElement || document.documentElement;
+                        const initialTop = scroller.scrollTop;
+                        if (Math.abs(initialTop - $expectedTop) > $scrollTolerance) return { moved: true };
                         const behavior = scroller.style.getPropertyValue('scroll-behavior');
                         const priority = scroller.style.getPropertyPriority('scroll-behavior');
                         scroller.style.setProperty('scroll-behavior', 'auto', 'important');
@@ -2105,28 +2118,38 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                                 }
                                 scroller.scrollTop = Math.max(0, nextTop);
                             }
-                            return true;
+                            return { expectedTop: $expectedTop + scroller.scrollTop - initialTop };
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');
                         }
                     })()
                     """.trimIndent()
-                ) == "true"
-            }.getOrDefault(false)
+                ) ?: return@runCatching (false to null)
+                val outcome = JSONObject(result)
+                outcome.optBoolean("moved") to
+                    outcome.optDouble("expectedTop", Double.NaN).takeIf { it.isFinite() }
+            }.getOrDefault(false to null)
 
             repeat(20) {
                 if (!isCurrent()) return@launch
                 val barBottom = props?.jumpBarBottom ?: 0.0
-                if (barBottom > 0.0 && measure(barBottom)) {
-                    repeat(2) {
-                        delay(50L)
-                        if (!isCurrent()) return@launch
-                        val currentBottom = props?.jumpBarBottom ?: 0.0
-                        if (currentBottom <= 0.0) return@launch
-                        measure(currentBottom)
+                if (barBottom > 0.0) {
+                    val (moved, measuredTop) = measure(barBottom, expectedTop)
+                    if (moved) return@launch
+                    if (measuredTop != null) {
+                        expectedTop = measuredTop
+                        repeat(2) {
+                            delay(50L)
+                            if (!isCurrent()) return@launch
+                            val currentBottom = props?.jumpBarBottom ?: 0.0
+                            if (currentBottom <= 0.0) return@launch
+                            val (recheckMoved, recheckedTop) = measure(currentBottom, expectedTop)
+                            if (recheckMoved) return@launch
+                            if (recheckedTop != null) expectedTop = recheckedTop
+                        }
+                        return@launch
                     }
-                    return@launch
                 }
                 delay(50L)
             }
@@ -2134,12 +2157,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             if (!isCurrent()) return@launch
             val barBottom = props?.jumpBarBottom ?: 0.0
             if (barBottom <= 0.0) return@launch
-            val fallbackTop = runCatching {
+            val fallback = runCatching {
                 nav.evaluateJavascript(
                     """
                     (function() {
                         const scroller = document.scrollingElement || document.documentElement;
                         const initialTop = scroller.scrollTop;
+                        if (Math.abs(initialTop - $landingTop) > $scrollTolerance) return null;
                         const move = $barBottom + 2;
                         if (document.body && initialTop < move) {
                             const padding = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
@@ -2150,16 +2174,21 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         scroller.style.setProperty('scroll-behavior', 'auto', 'important');
                         try {
                             scroller.scrollTop = Math.max(0, initialTop - move);
-                            return scroller.scrollTop;
+                            return {
+                                top: scroller.scrollTop,
+                                expectedTop: $landingTop + scroller.scrollTop - initialTop
+                            };
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');
                         }
                     })()
                     """.trimIndent()
-                )?.toDoubleOrNull()
+                )?.let { JSONObject(it) }
             }.getOrNull() ?: return@launch
-            if (!fallbackTop.isFinite()) return@launch
+            val fallbackTop = fallback.optDouble("top", Double.NaN)
+            val expectedFallbackTop = fallback.optDouble("expectedTop", Double.NaN)
+            if (!fallbackTop.isFinite() || !expectedFallbackTop.isFinite()) return@launch
             delay(50L)
             if (!isCurrent() || (props?.jumpBarBottom ?: 0.0) <= 0.0) return@launch
             runCatching {
@@ -2167,6 +2196,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     """
                     (function() {
                         const scroller = document.scrollingElement || document.documentElement;
+                        if (Math.abs(scroller.scrollTop - $expectedFallbackTop) > $scrollTolerance) return;
                         if (Math.abs(scroller.scrollTop - $fallbackTop) <= 1) return;
                         const behavior = scroller.style.getPropertyValue('scroll-behavior');
                         const priority = scroller.style.getPropertyPriority('scroll-behavior');
