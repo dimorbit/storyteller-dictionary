@@ -1991,6 +1991,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         const group = readium.getDecorations('storyteller-jump-measure');
                         const scroller = document.scrollingElement || document.documentElement;
                         let lineTop;
+                        let clearance;
                         try {
                             group.add({
                                 id: 'jump', locator, style: 'storyteller-jump-measure',
@@ -2039,10 +2040,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                             );
                             if (!rect) return false;
                             lineTop = scroller.scrollTop + rect.top;
+                            const element = quoteRange.startContainer.parentElement;
+                            const computedLineHeight = element
+                                ? parseFloat(getComputedStyle(element).lineHeight)
+                                : NaN;
+                            const lineHeight = Number.isFinite(computedLineHeight) && computedLineHeight > 0
+                                ? computedLineHeight
+                                : rect.height;
+                            clearance = Math.max(8, lineHeight / 2);
                         } finally {
                             group.clear();
                         }
-                        scroller.scrollTop = Math.max(0, lineTop - $barBottom - 8);
+                        scroller.scrollTop = Math.max(0, lineTop - $barBottom - clearance);
                         return true;
                     })();
                     """.trimIndent()
