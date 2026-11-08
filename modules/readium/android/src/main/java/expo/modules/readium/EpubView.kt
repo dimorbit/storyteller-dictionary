@@ -11,6 +11,7 @@ import android.text.Html
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.webkit.JavascriptInterface
 import androidx.annotation.ColorInt
 import androidx.core.graphics.toColorInt
@@ -183,6 +184,23 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
     }
 
+    private fun cancelJumpForReaderInput() {
+        if (pendingJumpLocator != null || jumpPositionJob?.isActive == true) {
+            pendingJumpLocator = null
+            cancelJumpPosition()
+        }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) cancelJumpForReaderInput()
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL) cancelJumpForReaderInput()
+        return super.dispatchGenericMotionEvent(event)
+    }
+
     // When the WebView has an active InputConnection (after a touch/tap), Android routes
     // the next key's ACTION_DOWN through the IME dispatch path (ViewRootImpl.dispatchKeyFromIme),
     // which calls dispatchKeyEventPreIme directly on the view hierarchy — bypassing
@@ -195,10 +213,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             val activity = appContext.currentActivity as FragmentActivity?
             when (event.keyCode) {
                 93, 117 -> {
+                    cancelJumpForReaderInput()
                     activity?.lifecycleScope?.launch { navigator?.goForward(animated = false) }
                     return true
                 }
                 92 -> {
+                    cancelJumpForReaderInput()
                     activity?.lifecycleScope?.launch { navigator?.goBackward(animated = false) }
                     return true
                 }
@@ -241,6 +261,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // Read the bar position when the destination page reports; it can change during a jump.
     private var pendingJumpLocator: Locator? = null
     private var jumpPositionJob: Job? = null
+    // WebView scripts can outlive the coroutine that queued them.
+    @Volatile
+    private var jumpPositionGeneration = 0
 
     // Locators this view emitted that the reader has not sent back yet, oldest first. The
     // reader sends each one back as the locator prop, sometimes after newer ones were
@@ -1017,9 +1040,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     private fun cancelJumpPosition() {
+        jumpPositionGeneration++
         jumpPositionJob?.cancel()
         jumpPositionJob = null
     }
+
+    @JavascriptInterface
+    fun isJumpPositionCurrent(generation: Int): Boolean = jumpPositionGeneration == generation
 
     fun go(locator: Locator, scrollAfterNavigation: Boolean = false) {
         cancelJumpPosition()
@@ -1968,28 +1995,55 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private fun positionJump(jump: Locator) {
         val nav = navigator ?: return
+        val generation = jumpPositionGeneration
         jumpPositionJob = activity?.lifecycleScope?.launch {
             fun isCurrent(): Boolean =
-                isActive && navigator === nav && nav.currentLocator.value.href == jump.href &&
+                isActive && jumpPositionGeneration == generation &&
+                    navigator === nav && nav.currentLocator.value.href == jump.href &&
                     props?.isPlaying == false && props?.scrollMode == true
 
-            val scrollTolerance = 2
-            val landingTop = runCatching {
+            // A delayed WebView call must not adjust an old landing.
+            val maxPlacementMs = 500L
+            val startedAt = SystemClock.elapsedRealtime()
+            val landing = runCatching {
                 nav.evaluateJavascript(
-                    "(document.scrollingElement || document.documentElement).scrollTop"
-                )?.toDoubleOrNull()
+                    """
+                    (function() {
+                        let guard = globalThis.__storytellerJumpGuard;
+                        if (!guard) {
+                            guard = { id: 0, input: false };
+                            globalThis.__storytellerJumpGuard = guard;
+                            for (const type of ['touchstart', 'touchmove', 'pointerdown', 'wheel', 'keydown']) {
+                                document.addEventListener(type, () => { guard.input = true; }, { capture: true, passive: true });
+                            }
+                        }
+                        guard.id++;
+                        guard.input = false;
+                        return { top: (document.scrollingElement || document.documentElement).scrollTop, time: performance.now(), id: guard.id };
+                    })()
+                    """.trimIndent()
+                )?.let { JSONObject(it) }
             }.getOrNull() ?: return@launch
-            if (!landingTop.isFinite()) return@launch
-            // Advance this only by our own corrections, not tolerated reader movement.
-            var expectedTop = landingTop
+            val landingTop = landing.optDouble("top", Double.NaN)
+            val landingTime = landing.optDouble("time", Double.NaN)
+            val landingId = landing.optInt("id", 0)
+            val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+            if (!landingTop.isFinite() || !landingTime.isFinite() || landingId <= 0 || !isCurrent() ||
+                elapsedMs > maxPlacementMs
+            ) return@launch
+            val deadline = landingTime + (maxPlacementMs - elapsedMs)
 
             delay(32L)
-            suspend fun measure(barBottom: Double, expectedTop: Double): Pair<Boolean, Double?> = runCatching {
+            suspend fun measure(barBottom: Double): Pair<Boolean, Boolean> = runCatching {
                 val result = nav.evaluateJavascript(
                     """
                     (function() {
                         const scroller = document.scrollingElement || document.documentElement;
-                        if (Math.abs(scroller.scrollTop - $expectedTop) > $scrollTolerance) return { moved: true };
+                        const guard = globalThis.__storytellerJumpGuard;
+                        const now = performance.now();
+                        if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                            !guard || guard.id !== $landingId || guard.input || now < $landingTime ||
+                            now > $deadline || scroller.scrollTop !== $landingTop) return { moved: true };
                         const locator = ${jump.toJSON()};
                         const body = document.body;
                         const normalize = (text) => text.replace(/\s+/g, ' ').trim();
@@ -2095,13 +2149,15 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                             ? Math.max(0, Math.min(preferred, (rect.top - previousBottom) / 2))
                             : preferred;
                         const target = $barBottom + clearance;
-                        const initialTop = scroller.scrollTop;
-                        if (Math.abs(initialTop - $expectedTop) > $scrollTolerance) return { moved: true };
+                        if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                            guard.id !== $landingId || guard.input || scroller.scrollTop !== $landingTop ||
+                            performance.now() > $deadline) return { moved: true };
                         const behavior = scroller.style.getPropertyValue('scroll-behavior');
                         const priority = scroller.style.getPropertyPriority('scroll-behavior');
                         scroller.style.setProperty('scroll-behavior', 'auto', 'important');
                         try {
                             for (let i = 0; i < 2; i++) {
+                                if (!storytellerAPI.isJumpPositionCurrent($generation)) return { moved: true };
                                 let current = firstRect();
                                 if (!current) return false;
                                 let delta = current.top - target;
@@ -2110,99 +2166,68 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                                 if (nextTop < 0) {
                                     // Keep this space until the resource unloads so dismissing the bar moves nothing.
                                     const padding = parseFloat(getComputedStyle(body).paddingTop) || 0;
+                                    if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                                        guard.id !== $landingId || guard.input || performance.now() > $deadline) return { moved: true };
                                     body.style.setProperty('padding-top', (padding - nextTop) + 'px', 'important');
                                     current = firstRect();
-                                    if (!current) return false;
+                                    if (!current) return { placed: true };
                                     delta = current.top - target;
                                     nextTop = scroller.scrollTop + delta;
                                 }
+                                if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                                    guard.id !== $landingId || guard.input || performance.now() > $deadline) return { moved: true };
                                 scroller.scrollTop = Math.max(0, nextTop);
                             }
-                            return { expectedTop: $expectedTop + scroller.scrollTop - initialTop };
+                            return { placed: true };
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');
                         }
                     })()
                     """.trimIndent()
-                ) ?: return@runCatching (false to null)
+                ) ?: return@runCatching (false to false)
                 val outcome = JSONObject(result)
-                outcome.optBoolean("moved") to
-                    outcome.optDouble("expectedTop", Double.NaN).takeIf { it.isFinite() }
-            }.getOrDefault(false to null)
+                outcome.optBoolean("moved") to outcome.optBoolean("placed")
+            }.getOrDefault(false to false)
 
-            repeat(20) {
-                if (!isCurrent()) return@launch
-                val barBottom = props?.jumpBarBottom ?: 0.0
-                if (barBottom > 0.0) {
-                    val (moved, measuredTop) = measure(barBottom, expectedTop)
-                    if (moved) return@launch
-                    if (measuredTop != null) {
-                        expectedTop = measuredTop
-                        repeat(2) {
-                            delay(50L)
-                            if (!isCurrent()) return@launch
-                            val currentBottom = props?.jumpBarBottom ?: 0.0
-                            if (currentBottom <= 0.0) return@launch
-                            val (recheckMoved, recheckedTop) = measure(currentBottom, expectedTop)
-                            if (recheckMoved) return@launch
-                            if (recheckedTop != null) expectedTop = recheckedTop
-                        }
-                        return@launch
-                    }
-                }
-                delay(50L)
-            }
-
-            if (!isCurrent()) return@launch
+            if (!isCurrent() || SystemClock.elapsedRealtime() - startedAt > maxPlacementMs) return@launch
             val barBottom = props?.jumpBarBottom ?: 0.0
             if (barBottom <= 0.0) return@launch
-            val fallback = runCatching {
-                nav.evaluateJavascript(
-                    """
-                    (function() {
-                        const scroller = document.scrollingElement || document.documentElement;
-                        const initialTop = scroller.scrollTop;
-                        if (Math.abs(initialTop - $landingTop) > $scrollTolerance) return null;
-                        const move = $barBottom + 2;
-                        if (document.body && initialTop < move) {
-                            const padding = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
-                            document.body.style.setProperty('padding-top', (padding + move - initialTop) + 'px', 'important');
-                        }
-                        const behavior = scroller.style.getPropertyValue('scroll-behavior');
-                        const priority = scroller.style.getPropertyPriority('scroll-behavior');
-                        scroller.style.setProperty('scroll-behavior', 'auto', 'important');
-                        try {
-                            scroller.scrollTop = Math.max(0, initialTop - move);
-                            return {
-                                top: scroller.scrollTop,
-                                expectedTop: $landingTop + scroller.scrollTop - initialTop
-                            };
-                        } finally {
-                            if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
-                            else scroller.style.removeProperty('scroll-behavior');
-                        }
-                    })()
-                    """.trimIndent()
-                )?.let { JSONObject(it) }
-            }.getOrNull() ?: return@launch
-            val fallbackTop = fallback.optDouble("top", Double.NaN)
-            val expectedFallbackTop = fallback.optDouble("expectedTop", Double.NaN)
-            if (!fallbackTop.isFinite() || !expectedFallbackTop.isFinite()) return@launch
-            delay(50L)
-            if (!isCurrent() || (props?.jumpBarBottom ?: 0.0) <= 0.0) return@launch
+            val (moved, placed) = measure(barBottom)
+            if (!isCurrent() || moved || placed || props?.jumpBarBottom != barBottom ||
+                SystemClock.elapsedRealtime() - startedAt > maxPlacementMs
+            ) return@launch
+
             runCatching {
                 nav.evaluateJavascript(
                     """
                     (function() {
                         const scroller = document.scrollingElement || document.documentElement;
-                        if (Math.abs(scroller.scrollTop - $expectedFallbackTop) > $scrollTolerance) return;
-                        if (Math.abs(scroller.scrollTop - $fallbackTop) <= 1) return;
+                        const guard = globalThis.__storytellerJumpGuard;
+                        const initialTop = scroller.scrollTop;
+                        const now = performance.now();
+                        if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                            !guard || guard.id !== $landingId || guard.input || now < $landingTime ||
+                            now > $deadline || initialTop !== $landingTop) return;
+                        const nextTop = Math.max(0, initialTop - ($barBottom + 2));
+                        if (nextTop === initialTop || !document.body) return;
+                        // An unverified quote must not move already-visible content.
+                        const content = document.createRange();
+                        content.selectNodeContents(document.body);
+                        if (Array.from(content.getClientRects()).some((rect) =>
+                            rect.width > 0 && rect.height > 0 && rect.right > 0 &&
+                            rect.left < window.innerWidth && rect.bottom > $barBottom && rect.top < window.innerHeight
+                        )) return;
+                        if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                            guard.id !== $landingId || guard.input || scroller.scrollTop !== $landingTop ||
+                            performance.now() > $deadline) return;
                         const behavior = scroller.style.getPropertyValue('scroll-behavior');
                         const priority = scroller.style.getPropertyPriority('scroll-behavior');
                         scroller.style.setProperty('scroll-behavior', 'auto', 'important');
                         try {
-                            scroller.scrollTop = $fallbackTop;
+                            if (!storytellerAPI.isJumpPositionCurrent($generation) ||
+                                guard.id !== $landingId || guard.input || performance.now() > $deadline) return;
+                            scroller.scrollTop = nextTop;
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');
