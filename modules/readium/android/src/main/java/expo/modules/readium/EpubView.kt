@@ -1997,14 +1997,44 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                                 element: '<span></span>'
                             });
                             const range = group.items[0]?.range;
-                            if (!range || normalize(range.toString()) !== quote) return false;
+                            if (!range) return false;
+                            const rangeText = range.toString();
+                            if (normalize(rangeText) !== quote) return false;
                             const preceding = document.createRange();
                             preceding.selectNodeContents(document.body);
                             preceding.setEnd(range.startContainer, range.startOffset);
                             const prefix = normalize(preceding.toString());
                             const start = prefix.length + (prefix && text[prefix.length] === ' ' ? 1 : 0);
                             if (start !== match) return false;
-                            const rect = Array.from(range.getClientRects()).find(
+
+                            // Surrounding whitespace can have a rectangle on another line.
+                            const quoteStart = rangeText.search(/\S/);
+                            const quoteEnd = rangeText.trimEnd().length;
+                            const quoteRange = range.cloneRange();
+                            const nodes = document.createNodeIterator(
+                                range.commonAncestorContainer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION
+                            );
+                            let offset = 0;
+                            let foundStart = false;
+                            let foundEnd = false;
+                            for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
+                                if (!range.intersectsNode(node)) continue;
+                                const from = node === range.startContainer ? range.startOffset : 0;
+                                const to = node === range.endContainer ? range.endOffset : node.length;
+                                const nextOffset = offset + to - from;
+                                if (!foundStart && quoteStart < nextOffset) {
+                                    quoteRange.setStart(node, from + quoteStart - offset);
+                                    foundStart = true;
+                                }
+                                if (foundStart && quoteEnd <= nextOffset) {
+                                    quoteRange.setEnd(node, from + quoteEnd - offset);
+                                    foundEnd = true;
+                                    break;
+                                }
+                                offset = nextOffset;
+                            }
+                            if (!foundEnd || normalize(quoteRange.toString()) !== quote) return false;
+                            const rect = Array.from(quoteRange.getClientRects()).find(
                                 (rect) => rect.width > 0 && rect.height > 0
                             );
                             if (!rect) return false;

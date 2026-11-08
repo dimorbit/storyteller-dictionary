@@ -157,6 +157,7 @@ extra adjustment. Fragment centering is skipped for paused text jumps but is
 unchanged for playback follow. The temporary group reads the range stored by
 the Readium decorator ([Android 3.1.2](https://github.com/readium/kotlin-toolkit/blob/3.1.2/readium/navigator/src/main/assets/_scripts/src/decorator.js),
 [iOS 3.6.0](https://github.com/readium/swift-toolkit/blob/3.6.0/Sources/Navigator/EPUB/Scripts/src/decorator.js)).
+The measured rectangle is the quote's own line, not the start of Readium's resolved range.
 
 The in-flow toolbar puts the bar bottom 16 pixels inside the reader; a floating
 toolbar places it at its measured bottom plus 40 pixels, less the top safe
