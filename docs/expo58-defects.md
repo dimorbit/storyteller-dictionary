@@ -155,6 +155,14 @@ the landing needs a device check. When a reader sheet is open, only the reader
 overlay is hidden; the navigation sheet keeps its own control and the inset
 keeps its extra 8 logical pixels of breathing room.
 
+## Footnote sheet keeps the reader covered after it closes
+
+- **Fork cause identified:** the merge (`2413a03`) kept the fork's plain WebView `app/(root)/footnote.tsx` (`66480e9` and later), which never dispatches `footnoteClosed`. The fork's only dispatch was a `beforeRemove` listener on the footnote screen in `app/(root)/_layout.tsx`. The merge resolved that file to upstream's version, which has no footnote listener, so nothing dispatched the close.
+- Effect: `footnoteContent` stays set, so the full-screen overlay in `components/Epub.tsx` keeps covering the reader, and each tap runs `router.dismiss()`.
+- Restoring the `_layout.tsx` listener would not help: expo-router 58.0.30 does not emit `beforeRemove`. Its navigation core emits `removePrevented` and `removed`.
+- **Fixed in `footnote.tsx`:** the screen dispatches `footnoteClosed` from a `removed` listener, as upstream `c3e246d` does. `removed` fires after any removal (swipe, tap outside, back, navigating away) and not on mount. Keep the dispatch in `footnote.tsx`; do not add a second one in `_layout.tsx`.
+- Not run on a device yet.
+
 ## Verification limits
 
 This investigation used source, Git history, the locked package sources, and

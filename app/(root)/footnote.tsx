@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useNavigation } from "expo-router"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Linking, View } from "react-native"
 import { WebView } from "react-native-webview"
 
@@ -9,7 +10,8 @@ import {
 } from "@/components/toolbarItems/readerFormSheetLayout"
 import { PortalHost } from "@/components/ui/portal-context"
 import { useColorTheme } from "@/hooks/useColorTheme"
-import { useAppSelector } from "@/store/appState"
+import { useAppDispatch, useAppSelector } from "@/store/appState"
+import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
 
 const minFootnoteHeight = 120
 
@@ -57,6 +59,18 @@ export default function FootnoteScreen() {
   useLayoutEffect(() => {
     pageStarted.current = false
   }, [source])
+
+  // 'removed' covers every dismissal (Expo 58 has no beforeRemove). It fires
+  // after this cleanup, so unsubscribe on the next microtask.
+  const dispatch = useAppDispatch()
+  const navigation = useNavigation()
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("removed", () => {
+      dispatch(bookshelfSlice.actions.footnoteClosed())
+    })
+
+    return () => queueMicrotask(unsubscribe)
+  }, [dispatch, navigation])
 
   if (!footnoteContent) return null
 
