@@ -1,11 +1,10 @@
-import { useLocalSearchParams, useSegments } from "expo-router"
+import { useIsFocused, useLocalSearchParams, useSegments } from "expo-router"
 import { StatusBar } from "expo-status-bar"
 import { useEffect } from "react"
 
 import { Epub } from "@/components/Epub"
 import { LoadingView } from "@/components/LoadingView"
 import { useSpansFold } from "@/lib/pose"
-import { useIsFocused } from "@/hooks/useIsFocused"
 import { useIsNotBackground } from "@/hooks/useIsNotBackground"
 import { useAppDispatch, useAppSelector } from "@/store/appState"
 import { useGetBookQuery } from "@/store/localApi"
@@ -35,39 +34,38 @@ export default function BookScreen() {
   const isAudioLoading = useAppSelector(
     (state) => state.bookshelf.isAudioLoading,
   )
-  // Every screen that can cover the reader dismisses back to it, and leaving
-  // the reader pops this screen, so the reader stays mounted until then.
-  // Gating on focus tore it down while a sheet was closing: the sheet's route
-  // leaves `segments` before the focus effect runs again, which rebuilt the
-  // EPUB view on every close.
-  const showEpub = !!book && !!locator && isNotBackground && !isAudioLoading
+  // `useSegments` is computed during render. The local focus hook mirrored
+  // focus into state from a post-commit effect, so on close the render that
+  // dropped the sheet still saw `isFocused` false and the reader was rebuilt.
+  // expo-router's `useIsFocused` reads focus in that same render, so the two
+  // agree and the reader survives the close. Its own sheets keep it mounted;
+  // any other screen that covers the reader releases it.
+  const showEpub =
+    !!book &&
+    !!locator &&
+    (isFocused || isReaderSheetOpen) &&
+    isNotBackground &&
+    !isAudioLoading
 
   useEffect(() => {
     dispatch(bookshelfSlice.actions.bookOpened({ bookUuid: uuid, format }))
   }, [dispatch, format, uuid])
 
-  // The reader no longer remounts when it is uncovered, so re-assert the
-  // reading speed when it regains focus instead of relying on a remount.
   useEffect(() => {
-    if (!isFocused) return
-
     dispatch(
       bookshelfSlice.actions.playbackSpeedContextChanged({
         context: format === "readaloud" && showEpub ? "reading" : "listening",
       }),
     )
-  }, [dispatch, format, isFocused, showEpub])
 
-  useEffect(
-    () => () => {
+    return () => {
       dispatch(
         bookshelfSlice.actions.playbackSpeedContextChanged({
           context: "listening",
         }),
       )
-    },
-    [dispatch],
-  )
+    }
+  }, [dispatch, format, showEpub])
 
   const spansFold = useSpansFold()
 
