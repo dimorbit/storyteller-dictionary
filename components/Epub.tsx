@@ -353,7 +353,8 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
         <SelectionMenu
           bookUuid={book.uuid}
           x={selection.x + insets.left}
-          y={selection.y + (floatingToolbar ? insets.top : toolbarHeight)}
+          // Native positions are relative to the reader's own top edge.
+          y={selection.y + readerTop}
           locator={selection.locator}
           existingHighlight={activeHighlight}
           dictionaryEntry={activeDictionaryEntry}
