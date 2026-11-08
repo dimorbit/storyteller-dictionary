@@ -87,7 +87,7 @@ data class Props(
     var marginLeft: Int?,
     var marginRight: Int?,
     var scrollMode: Boolean?,
-    var jumpTopInset: Double?
+    var jumpBarBottom: Double?
 )
 
 
@@ -112,7 +112,7 @@ data class FinalizedProps(
     var marginLeft: Int,
     var marginRight: Int,
     var scrollMode: Boolean,
-    var jumpTopInset: Double
+    var jumpBarBottom: Double
 )
 
 
@@ -237,7 +237,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     private var changingResource = false
 
     private data class PendingLocatorEcho(val locator: Locator, val emittedAtMs: Long)
-    // Read the inset when the destination page reports; at jump time it can be stale or zero.
+    // Read the bar position when the destination page reports; it can change during a jump.
     private var pendingJumpLocator: Locator? = null
 
     // Locators this view emitted that the reader has not sent back yet, oldest first. The
@@ -273,7 +273,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         marginLeft = null,
         marginRight = null,
         scrollMode = null,
-        jumpTopInset = null
+        jumpBarBottom = null
     )
     var props: FinalizedProps? = null
 
@@ -645,7 +645,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 marginLeft = pendingProps.marginLeft ?: oldProps?.marginLeft ?: 0,
                 marginRight = pendingProps.marginRight ?: oldProps?.marginRight ?: 0,
                 scrollMode = pendingProps.scrollMode ?: oldProps?.scrollMode ?: false,
-                jumpTopInset = pendingProps.jumpTopInset ?: oldProps?.jumpTopInset ?: 0.0
+                jumpBarBottom = pendingProps.jumpBarBottom ?: oldProps?.jumpBarBottom ?: 0.0
             )
 
         props = finalProps
@@ -653,8 +653,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             pendingJumpLocator = null
         }
         // Changing the overlay alone must not run navigation or playback follow.
-        if (oldProps != null && finalProps.jumpTopInset != oldProps.jumpTopInset &&
-            finalProps.copy(jumpTopInset = oldProps.jumpTopInset) == oldProps
+        if (oldProps != null && finalProps.jumpBarBottom != oldProps.jumpBarBottom &&
+            finalProps.copy(jumpBarBottom = oldProps.jumpBarBottom) == oldProps
         ) return
 
         val scrollModeChanged = oldProps?.let { finalProps.scrollMode != it.scrollMode } ?: false
@@ -1032,14 +1032,16 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         if (locator.href != navigator.currentLocator.value.href) {
             changingResource = true
         }
-        pendingJumpLocator = if (scrollAfterNavigation && props?.isPlaying == false) {
+        val isPausedTextJump = scrollAfterNavigation && props?.isPlaying == false &&
+            !navigationLocator.text.highlight.isNullOrBlank()
+        pendingJumpLocator = if (isPausedTextJump) {
             navigationLocator
         } else {
             null
         }
         navigator.go(navigationLocator, true)
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
-        if (scrollAfterNavigation) {
+        if (scrollAfterNavigation && !isPausedTextJump) {
             activity?.lifecycleScope?.launch {
                 scrollFragmentIntoView(navigationLocator)
             }
@@ -1953,20 +1955,61 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         if (jump != null && locator.href == jump.href) {
             pendingJumpLocator = null
             activity?.lifecycleScope?.launch {
-                val inset = props?.jumpTopInset ?: 0.0
-                if (props?.isPlaying != false || inset <= 0.0) return@launch
-                val alignText = if (
-                    !jump.text.highlight.isNullOrBlank() &&
-                    jump.locations.fragments.isEmpty()
-                ) {
-                    "readium.scrollToLocator(${jump.toJSON()});"
-                } else ""
+                val barBottom = props?.jumpBarBottom ?: 0.0
+                if (props?.isPlaying != false || barBottom <= 0.0) return@launch
                 navigator?.evaluateJavascript(
                     """
                     (function() {
-                        $alignText
+                        if (!globalThis.readium || !readium.getDecorations ||
+                            !readium.registerDecorationTemplates) return false;
+                        const locator = ${jump.toJSON()};
+                        const normalize = (text) => text.replace(/\s+/g, ' ').trim();
+                        const quote = normalize(locator.text.highlight);
+                        if (!quote) return false;
+                        const text = normalize(document.body.textContent || '');
+                        const before = normalize(locator.text.before || '');
+                        const after = normalize(locator.text.after || '');
+                        let match = -1;
+                        for (let i = text.indexOf(quote); i !== -1; i = text.indexOf(quote, i + 1)) {
+                            const beforeEnd = i > 0 && text[i - 1] === ' ' ? i - 1 : i;
+                            const afterStart = i + quote.length + (text[i + quote.length] === ' ' ? 1 : 0);
+                            if ((before && !text.endsWith(before, beforeEnd)) ||
+                                (after && !text.startsWith(after, afterStart))) continue;
+                            if (match !== -1) return false;
+                            match = i;
+                        }
+                        if (match === -1) return false;
+
+                        // Readium stores its resolved DOM range on each decoration item.
+                        readium.registerDecorationTemplates({
+                            'storyteller-jump-measure': { layout: 'bounds', width: 'wrap' }
+                        });
+                        const group = readium.getDecorations('storyteller-jump-measure');
                         const scroller = document.scrollingElement || document.documentElement;
-                        scroller.scrollTop = Math.max(0, scroller.scrollTop - $inset);
+                        let lineTop;
+                        try {
+                            group.add({
+                                id: 'jump', locator, style: 'storyteller-jump-measure',
+                                element: '<span></span>'
+                            });
+                            const range = group.items[0]?.range;
+                            if (!range || normalize(range.toString()) !== quote) return false;
+                            const preceding = document.createRange();
+                            preceding.selectNodeContents(document.body);
+                            preceding.setEnd(range.startContainer, range.startOffset);
+                            const prefix = normalize(preceding.toString());
+                            const start = prefix.length + (prefix && text[prefix.length] === ' ' ? 1 : 0);
+                            if (start !== match) return false;
+                            const rect = Array.from(range.getClientRects()).find(
+                                (rect) => rect.width > 0 && rect.height > 0
+                            );
+                            if (!rect) return false;
+                            lineTop = scroller.scrollTop + rect.top;
+                        } finally {
+                            group.clear();
+                        }
+                        scroller.scrollTop = Math.max(0, lineTop - $barBottom - 8);
+                        return true;
                     })();
                     """.trimIndent()
                 )

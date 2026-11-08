@@ -5,7 +5,6 @@ import { useVerticalBarEdgeIOS } from "expo-status-bar"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   DeviceEventEmitter,
-  Platform,
   StatusBar,
   TouchableOpacity,
   View,
@@ -69,7 +68,6 @@ const backwardNavKeyCodes = [92]
 
 const barRowHeight = 52
 const navigationReturnHeight = 40 // NavigationReturnControl's h-10
-const navigationReturnJumpPadding = 8
 
 function EpubKeepAwake() {
   useKeepAwake()
@@ -244,9 +242,12 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const floatingToolbar = preferences?.floatingToolbar
   // Top padding of the reading area; the rail's return bar pins to it too.
   const pageTopPadding = floatingToolbar ? insets.top : 24
-  // Page rows the floating toolbar covers; the saved-word jump must clear them.
-  const floatingToolbarOverlap =
-    floatingToolbar && !rail ? Math.max(0, toolbarHeight - insets.top) : 0
+  const readerTop = pageTopPadding + (rail || floatingToolbar ? 0 : toolbarHeight)
+  const returnBarTop = rail ? pageTopPadding : toolbarHeight
+  const returnBarBottom = Math.max(
+    0,
+    returnBarTop + navigationReturnHeight - readerTop,
+  )
 
   const showingFootnote = useAppSelector(
     (state) => state.bookshelf.footnoteContent !== null,
@@ -382,13 +383,9 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           style={{ flex: 1 }}
           bookUuid={book.uuid}
           locator={locator}
-          jumpTopInset={
-            Platform.OS === "android" &&
-            returnPosition &&
-            preferences?.showReaderUi
-              ? navigationReturnHeight +
-                navigationReturnJumpPadding +
-                floatingToolbarOverlap
+          jumpBarBottom={
+            returnPosition && preferences?.showReaderUi && (rail || toolbarHeight > 0)
+              ? returnBarBottom
               : 0
           }
           highlights={highlights ?? []}
