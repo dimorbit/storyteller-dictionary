@@ -1,7 +1,10 @@
 import { router } from "expo-router"
 import { TableOfContentsIcon } from "lucide-react-native"
 
-import { getLastNavigationMenuTab } from "@/components/toolbarItems/navigation/navigationMenuSessionState"
+import {
+  getLastNavigationMenuTab,
+  setLastNavigationMenuParams,
+} from "@/components/toolbarItems/navigation/navigationMenuSessionState"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { useAppSelector } from "@/store/appState"
@@ -28,10 +31,12 @@ export function NavigationItem({ mode }: Props) {
         if (!bookUuid) return
 
         const tab = getLastNavigationMenuTab()
+        const params = { uuid: bookUuid, format, mode }
 
+        setLastNavigationMenuParams(params)
         router.push({
           pathname: `/navigation-menu/${tab}`,
-          params: { uuid: bookUuid, format, mode },
+          params,
         })
       }}
     >

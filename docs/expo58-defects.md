@@ -177,6 +177,10 @@ and playback follow need device checks.
 
 - **Fixed in `components/Epub.tsx`:** with a non-floating toolbar, the menu for selections, highlights and saved-word taps used the toolbar height instead of `readerTop`. That dropped the reader's 24 pixels of top padding, and in the rail layout it used a stale horizontal toolbar height, or 0. Both native readers report positions from the reader's own top edge and do not add its offset on screen, so this is the only place that does. Not run on a device yet.
 
+## Navigation menu forgot how it was opened after the Dictionary tab
+
+- **Fixed in `useNavigationMenuParams.ts` and `NavigationItem.tsx`:** expo-router 58.0.30 drops `initialParams` on `<Tabs.Screen>` (`getSortedChildren` in `build/useScreens.js` forwards only `listeners`, `options`, `getId` and `activityEnabled`), so a tab reached by a plain tab press has no route params. `e6f2b95` gave Contents, Bookmarks and Highlights a `navigateToTab` listener and left Dictionary on `initialParams`, so Contents, Dictionary, Contents in the audio player made the hook guess `mode` from the format (`text` for a readaloud book) and Contents showed the text table of contents instead of the track list. The book and format were guessed from the currently playing book in the same way. `NavigationItem` now records the book, format and mode in `navigationMenuSessionState.ts` as it opens the menu, and the hook reads them before that guess, which still applies when nothing was passed or recorded. Not run on a device yet.
+
 ## Verification limits
 
 This investigation used source, Git history, the locked package sources, and
