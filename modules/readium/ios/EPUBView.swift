@@ -45,9 +45,10 @@ struct Props {
     var marginLeft: Int?
     var marginRight: Int?
     var scrollMode: Bool?
+    var jumpBarBottom: Double?
 }
 
-struct FinalizedProps {
+struct FinalizedProps: Equatable {
     var bookId: String
     var locator: Locator?
     var isPlaying: Bool
@@ -67,6 +68,7 @@ struct FinalizedProps {
     var marginLeft: Int
     var marginRight: Int
     var scrollMode: Bool
+    var jumpBarBottom: Double
 }
 
 private struct EPUBLayoutChange {
@@ -303,6 +305,8 @@ class EPUBView: ExpoView {
 
 
     private var changingResource = false
+    private var pendingJumpLocator: Locator?
+    private var pendingJumpReady = false
     private var lastEmittedLocator: Locator?
     private let pagedLayoutBehavior = PagedEPUBLayoutBehavior()
     private let scrollLayoutBehavior = ScrollEPUBLayoutBehavior()
@@ -332,6 +336,11 @@ class EPUBView: ExpoView {
         }
 
         guard lhs.href.isEquivalentTo(rhs.href) else {
+            return false
+        }
+
+        // Two saved quotes can share the same fragment and progression.
+        if lhs.text != rhs.text && (lhs.text.highlight != nil || rhs.text.highlight != nil) {
             return false
         }
 
@@ -432,10 +441,20 @@ class EPUBView: ExpoView {
             textAlign: pendingProps.textAlign ?? oldProps?.textAlign ?? TextAlignment.justify,
             marginLeft: pendingProps.marginLeft ?? oldProps?.marginLeft ?? 0,
             marginRight: pendingProps.marginRight ?? oldProps?.marginRight ?? 0,
-            scrollMode: pendingProps.scrollMode ?? oldProps?.scrollMode ?? false
+            scrollMode: pendingProps.scrollMode ?? oldProps?.scrollMode ?? false,
+            jumpBarBottom: pendingProps.jumpBarBottom ?? oldProps?.jumpBarBottom ?? 0
         )
 
         props = finalProps
+        if finalProps.isPlaying {
+            pendingJumpLocator = nil
+            pendingJumpReady = false
+        }
+        if let oldProps, finalProps.jumpBarBottom != oldProps.jumpBarBottom {
+            var previousProps = finalProps
+            previousProps.jumpBarBottom = oldProps.jumpBarBottom
+            if previousProps == oldProps { return }
+        }
         let scrollModeChanged = oldProps.map { finalProps.scrollMode != $0.scrollMode } ?? false
         let enteredPageLayout = oldProps?.scrollMode == true && !finalProps.scrollMode
         let locatorChangedFromExternalUpdate = finalProps.locator != nil &&
@@ -625,6 +644,8 @@ class EPUBView: ExpoView {
 
     public func destroyNavigator() {
         initialLocatorEmissionInProgress = false
+        pendingJumpLocator = nil
+        pendingJumpReady = false
         self.navigator?.view.removeFromSuperview()
 
         if EPUBView.current === self {
@@ -736,12 +757,92 @@ class EPUBView: ExpoView {
         if locator.href != navigator?.currentLocation?.href {
             changingResource = true
         }
+        let isPausedTextJump = scrollAfterNavigation && props?.isPlaying == false &&
+            !(locator.text.highlight?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        pendingJumpLocator = isPausedTextJump ? locator : nil
+        pendingJumpReady = false
         Task {
-            _ = await self.navigator!.go(to: locator, options: .animated)
-            if scrollAfterNavigation {
+            guard let navigator = self.navigator else { return }
+            let didNavigate = await navigator.go(to: locator, options: .animated)
+            if isPausedTextJump {
+                guard self.pendingJumpLocator == locator else { return }
+                guard didNavigate else {
+                    self.pendingJumpLocator = nil
+                    return
+                }
+                self.pendingJumpReady = true
+                if let href = navigator.currentLocation?.href, href.isEquivalentTo(locator.href) {
+                    await self.positionJump(locator: locator)
+                }
+            } else if scrollAfterNavigation {
                 await self.scrollFragmentIntoView(locator: locator)
             }
         }
+    }
+
+    private func positionJump(locator: Locator) async {
+        guard pendingJumpReady, pendingJumpLocator == locator else { return }
+        pendingJumpLocator = nil
+        pendingJumpReady = false
+        guard props?.isPlaying == false, let barBottom = props?.jumpBarBottom, barBottom > 0,
+              let navigator = navigator,
+              let data = try? JSONSerialization.data(withJSONObject: locator.json),
+              let locatorJson = String(data: data, encoding: .utf8) else { return }
+
+        _ = await navigator.evaluateJavaScript("""
+            (function() {
+                if (!globalThis.readium || !readium.getDecorations ||
+                    !readium.registerDecorationTemplates) return false;
+                const locator = \(locatorJson);
+                const normalize = (text) => text.replace(/\\s+/g, ' ').trim();
+                const quote = normalize(locator.text.highlight);
+                if (!quote) return false;
+                const text = normalize(document.body.textContent || '');
+                const before = normalize(locator.text.before || '');
+                const after = normalize(locator.text.after || '');
+                let match = -1;
+                for (let i = text.indexOf(quote); i !== -1; i = text.indexOf(quote, i + 1)) {
+                    const beforeEnd = i > 0 && text[i - 1] === ' ' ? i - 1 : i;
+                    const afterStart = i + quote.length + (text[i + quote.length] === ' ' ? 1 : 0);
+                    if ((before && !text.endsWith(before, beforeEnd)) ||
+                        (after && !text.startsWith(after, afterStart))) continue;
+                    if (match !== -1) return false;
+                    match = i;
+                }
+                if (match === -1) return false;
+
+                // Readium stores its resolved DOM range on each decoration item.
+                readium.registerDecorationTemplates({
+                    'storyteller-jump-measure': { layout: 'bounds', width: 'wrap' }
+                });
+                const group = readium.getDecorations('storyteller-jump-measure');
+                const scroller = document.scrollingElement || document.documentElement;
+                let lineTop;
+                try {
+                    group.add({
+                        id: 'jump', locator, style: 'storyteller-jump-measure',
+                        element: '<span></span>'
+                    });
+                    const range = group.items[0]?.range;
+                    if (!range || normalize(range.toString()) !== quote) return false;
+                    const preceding = document.createRange();
+                    preceding.selectNodeContents(document.body);
+                    preceding.setEnd(range.startContainer, range.startOffset);
+                    const prefix = normalize(preceding.toString());
+                    const start = prefix.length + (prefix && text[prefix.length] === ' ' ? 1 : 0);
+                    if (start !== match) return false;
+                    const rect = Array.from(range.getClientRects()).find(
+                        (rect) => rect.width > 0 && rect.height > 0
+                    );
+                    if (!rect) return false;
+                    lineTop = scroller.scrollTop + rect.top;
+                } finally {
+                    group.clear();
+                }
+                scroller.scrollTop = Math.max(0, lineTop - \(barBottom) - 8);
+                return true;
+            })();
+        """)
     }
 
     func decorateHighlights() {
@@ -1481,6 +1582,10 @@ extension EPUBView: EPUBNavigatorDelegate {
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
         let navigator = (navigator as! EPUBNavigatorViewController)
         let shouldSkipLocatorEmission = initialLocatorEmissionInProgress
+
+        if let jump = pendingJumpLocator, jump.href.isEquivalentTo(locator.href) {
+            Task { await self.positionJump(locator: jump) }
+        }
 
         findOnPage(locator: locator)
         Task {
