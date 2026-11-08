@@ -143,37 +143,29 @@ the clip ID in `otherLocations` (`locations.storytellerClipId` in JSON).
 At navigation time, older saved locators without clip metadata, but with a text
 quote and a first fragment matching a clip in the same resource, are copied
 with that fragment moved into the metadata; stored words are not migrated.
-Genuine fragments and active-playback centering are left unchanged. Old and new
-saved-word jumps, audio seeking, and playback follow still need a device check.
+Genuine fragments remain in the locator. Old and new saved-word jumps, audio
+seeking, and playback follow still need a device check.
 
-The Android scroll-mode jump now leaves room for the return bar: React passes
-a 48-logical-pixel inset to the reader, which re-aligns the target and scrolls
-back by that amount after Readium reports the destination. The overlay still
-does not resize the page, and active-playback centering is untouched. At the
-start of a resource, scrolling may clamp before the full inset is available;
-the landing needs a device check. When a reader sheet is open, only the reader
-overlay is hidden; the navigation sheet keeps its own control and the inset
-keeps its extra 8 logical pixels of breathing room.
+Scroll-mode landings are now measured on Android and iOS, rather than moved
+back by a fixed 48 pixels. React passes `jumpBarBottom`, the bar's bottom edge
+relative to the reader, not a scroll distance. After navigation, a temporary,
+invisible Readium decoration resolves the saved quote to a DOM range. The
+highlight and its before/after context must identify one occurrence; the first
+rendered text rectangle gives the line's top. The reader places that top 8
+logical pixels below the bar. A missing, ambiguous, or unrendered quote gets no
+extra adjustment. Fragment centering is skipped for paused text jumps but is
+unchanged for playback follow.
 
-The return bar's inset follows the layout that places it. In the in-flow
-toolbar layout the bar sits 24 logical pixels above the page, so the 48 already
-clears it and is unchanged. With a floating toolbar, the opaque toolbar
-covers the page from `insets.top` to `toolbarHeight`, so the inset adds
-`toolbarHeight - insets.top` (never below zero). In rail mode there is no
-horizontal toolbar: the bar is pinned to the page's top edge (`insets.top`
-when floating, 24 otherwise) and kept inside the side insets, clear of the
-rail, so the 48 clears it too. The rail relies on `useVerticalBarEdgeIOS`,
-described for iOS devices such as iPhone Duo, and the native inset is
-Android-only (the iOS `jumpTopInset` prop is a no-op), so an iOS saved-word
-jump is not yet cleared of the bar. Device checks: in-flow matches the
-earlier check; floating lands the word below the toolbar and bar; rail shows
-the bar at the top, clear of the rail buttons, and hides it under a reader
-sheet.
-
-The saved-word jump reads the inset when Readium reports the destination page,
-not when the jump starts. The return place and toolbar measurement can change
-around the jump, so a value taken at jump time may be zero or stale, and the old
-equality check then dropped the scroll-back.
+The in-flow toolbar puts the bar bottom 16 pixels inside the reader; a floating
+toolbar places it at its measured bottom plus 40 pixels, less the top safe
+inset. The vertical rail puts it 40 pixels below the reader's top. The rail is
+iOS-only, so its native reader
+now handles the same measurement. The bar still overlays rather than resizes
+the page, and showing or hiding it alone does not move the text. The bar
+position is read after navigation; if the toolbar has not been measured yet,
+there is no adjustment. A reader sheet may hide the overlay without changing
+the landing. At resource boundaries the available scroll can clamp the result.
+These landings, the rail, audio seeking, and playback follow need device checks.
 
 ## Footnote sheet keeps the reader covered after it closes
 
@@ -190,5 +182,5 @@ the versioned Readium documentation. No packages were installed; no Gradle,
 typecheck, lint, emulator, or device run was performed. `node_modules` is absent
 here, so the repository's Vitest suite was not available without installation.
 The user confirmed the earlier saved-word landing and audio seek on an
-emulator. The return-bar inset, observed font, and view lifecycle have not
-been verified in a running app here.
+emulator. The measured return-bar landing, observed font, and view lifecycle
+have not been verified in a running app here.
