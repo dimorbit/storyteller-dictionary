@@ -5,6 +5,7 @@ import { useEffect } from "react"
 import { Epub } from "@/components/Epub"
 import { LoadingView } from "@/components/LoadingView"
 import { useSpansFold } from "@/lib/pose"
+import { useIsFocused } from "@/hooks/useIsFocused"
 import { useIsNotBackground } from "@/hooks/useIsNotBackground"
 import { useAppDispatch, useAppSelector } from "@/store/appState"
 import { useGetBookQuery } from "@/store/localApi"
@@ -22,6 +23,7 @@ export default function BookScreen() {
   const { data: book } = useGetBookQuery({ uuid })
   const locator = book?.position?.locator
 
+  const isFocused = useIsFocused()
   const segments = useSegments()
   const isReaderSheetOpen =
     segments.includes("navigation-menu") ||
@@ -33,31 +35,39 @@ export default function BookScreen() {
   const isAudioLoading = useAppSelector(
     (state) => state.bookshelf.isAudioLoading,
   )
-  // The reader is only ever covered by the sheets this screen pushes on top of
-  // itself, and leaving it pops the screen. Gating on focus tore the reader
-  // down while a sheet was closing, because the sheet's route disappears before
-  // focus returns, which rebuilt the EPUB view on every close.
+  // Every screen that can cover the reader dismisses back to it, and leaving
+  // the reader pops this screen, so the reader stays mounted until then.
+  // Gating on focus tore it down while a sheet was closing: the sheet's route
+  // leaves `segments` before the focus effect runs again, which rebuilt the
+  // EPUB view on every close.
   const showEpub = !!book && !!locator && isNotBackground && !isAudioLoading
 
   useEffect(() => {
     dispatch(bookshelfSlice.actions.bookOpened({ bookUuid: uuid, format }))
   }, [dispatch, format, uuid])
 
+  // The reader no longer remounts when it is uncovered, so re-assert the
+  // reading speed when it regains focus instead of relying on a remount.
   useEffect(() => {
+    if (!isFocused) return
+
     dispatch(
       bookshelfSlice.actions.playbackSpeedContextChanged({
         context: format === "readaloud" && showEpub ? "reading" : "listening",
       }),
     )
+  }, [dispatch, format, isFocused, showEpub])
 
-    return () => {
+  useEffect(
+    () => () => {
       dispatch(
         bookshelfSlice.actions.playbackSpeedContextChanged({
           context: "listening",
         }),
       )
-    }
-  }, [dispatch, format, showEpub])
+    },
+    [dispatch],
+  )
 
   const spansFold = useSpansFold()
 

@@ -240,6 +240,7 @@ Run the same critical tests on Android before merging if Android is in scope for
 
 ## Known Risk Areas
 
+- The reader stays mounted for as long as its screen exists, because every screen that can cover it dismisses back to it. A full screen pushed over the reader would stay behind it with its EPUB view and keep-awake. Check this whenever a new route can open from the reader.
 - Same-resource navigation and normal scroll-position persistence both update the `locator` prop. If unexpected auto-scroll returns, verify that native code can distinguish explicit bookmark/highlight/TOC navigation from a prop echo of a native `onLocatorChange`.
 - Anchor-only locators and progression-only locators use different fallback paths. Test both if possible.
 - Zero-height or empty anchor elements may rely on progression fallback rather than element-rect visibility.

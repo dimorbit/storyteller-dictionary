@@ -181,6 +181,10 @@ and playback follow need device checks.
 
 - **Fixed in `useNavigationMenuParams.ts` and `NavigationItem.tsx`:** expo-router 58.0.30 drops `initialParams` on `<Tabs.Screen>` (`getSortedChildren` in `build/useScreens.js` forwards only `listeners`, `options`, `getId` and `activityEnabled`), so a tab reached by a plain tab press has no route params. `e6f2b95` gave Contents, Bookmarks and Highlights a `navigateToTab` listener and left Dictionary on `initialParams`, so Contents, Dictionary, Contents in the audio player made the hook guess `mode` from the format (`text` for a readaloud book) and Contents showed the text table of contents instead of the track list. The book and format were guessed from the currently playing book in the same way. `NavigationItem` now records the book, format and mode in `navigationMenuSessionState.ts` as it opens the menu, and the hook reads them before that guess, which still applies when nothing was passed or recorded. Not run on a device yet.
 
+## Reader reloaded every time a sheet closed
+
+- **Fixed in `app/(root)/read/[uuid].tsx`:** `showEpub` required `isFocused || isReaderSheetOpen`. On dismiss the sheet route leaves `segments` (computed during render) before the focus effect runs (after commit), so one render had both false, the reader was swapped for `LoadingView` and rebuilt, which reloaded the EPUB view on every close and threw away a native navigator each time. The reader now stays mounted for as long as the screen exists; `isNotBackground` and `isAudioLoading` still release it, and every screen that can cover the reader dismisses back to it. The reading speed context is re-asserted when the reader regains focus and set to listening only on unmount, so a screen that lands over the reader and returns no longer leaves the listening speed in place. Verified on the emulator: six open and close cycles held the same first line with no blank frame and the seventh open still worked.
+
 ## Verification limits
 
 This investigation used source, Git history, the locked package sources, and
