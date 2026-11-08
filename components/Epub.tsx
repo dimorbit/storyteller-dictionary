@@ -242,6 +242,11 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const isJumpHeld = useAppSelector(getJumpHold)?.bookUuid === book.uuid
 
   const floatingToolbar = preferences?.floatingToolbar
+  // Top padding of the reading area; the rail's return bar pins to it too.
+  const pageTopPadding = floatingToolbar ? insets.top : 24
+  // Page rows the floating toolbar covers; the saved-word jump must clear them.
+  const floatingToolbarOverlap =
+    floatingToolbar && !rail ? Math.max(0, toolbarHeight - insets.top) : 0
 
   const showingFootnote = useAppSelector(
     (state) => state.bookshelf.footnoteContent !== null,
@@ -330,11 +335,15 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
       )}
       {/* Overlays the page top so showing it never resizes the reader. Stays
           before SelectionMenu so its backdrop (also z-2) sits above the bar. */}
-      {toolbarHeight > 0 && !isReaderSheetOpen && (
+      {(rail || toolbarHeight > 0) && !isReaderSheetOpen && (
         <HideableView
           hidden={!preferences?.showReaderUi}
-          className="absolute right-0 left-0 z-2"
-          style={{ top: toolbarHeight }}
+          className="absolute z-2"
+          style={
+            rail
+              ? { top: pageTopPadding, left: insets.left, right: insets.right }
+              : { top: toolbarHeight, left: 0, right: 0 }
+          }
         >
           <NavigationReturnControl bookUuid={book.uuid} />
         </HideableView>
@@ -365,13 +374,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           backgroundColor: background,
           paddingLeft: insets.left,
           paddingRight: insets.right,
-          ...(floatingToolbar
-            ? {
-                paddingTop: insets.top,
-              }
-            : {
-                paddingTop: 24,
-              }),
+          paddingTop: pageTopPadding,
         }}
       >
         <EPUBView
@@ -383,7 +386,9 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             Platform.OS === "android" &&
             returnPosition &&
             preferences?.showReaderUi
-              ? navigationReturnHeight + navigationReturnJumpPadding
+              ? navigationReturnHeight +
+                navigationReturnJumpPadding +
+                floatingToolbarOverlap
               : 0
           }
           highlights={highlights ?? []}

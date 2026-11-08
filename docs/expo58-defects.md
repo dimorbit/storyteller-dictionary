@@ -155,6 +155,21 @@ the landing needs a device check. When a reader sheet is open, only the reader
 overlay is hidden; the navigation sheet keeps its own control and the inset
 keeps its extra 8 logical pixels of breathing room.
 
+The return bar's inset follows the layout that places it. In the in-flow
+toolbar layout the bar sits 24 logical pixels above the page, so the 48 already
+clears it and is unchanged. With a floating toolbar, the opaque toolbar
+covers the page from `insets.top` to `toolbarHeight`, so the inset adds
+`toolbarHeight - insets.top` (never below zero). In rail mode there is no
+horizontal toolbar: the bar is pinned to the page's top edge (`insets.top`
+when floating, 24 otherwise) and kept inside the side insets, clear of the
+rail, so the 48 clears it too. The rail relies on `useVerticalBarEdgeIOS`,
+described for iOS devices such as iPhone Duo, and the native inset is
+Android-only (the iOS `jumpTopInset` prop is a no-op), so an iOS saved-word
+jump is not yet cleared of the bar. Device checks: in-flow matches the
+earlier check; floating lands the word below the toolbar and bar; rail shows
+the bar at the top, clear of the rail buttons, and hides it under a reader
+sheet.
+
 ## Footnote sheet keeps the reader covered after it closes
 
 - **Fork cause identified:** the merge (`2413a03`) kept the fork's plain WebView `app/(root)/footnote.tsx` (`66480e9` and later), which never dispatches `footnoteClosed`. The fork's only dispatch was a `beforeRemove` listener on the footnote screen in `app/(root)/_layout.tsx`. The merge resolved that file to upstream's version, which has no footnote listener, so nothing dispatched the close.
