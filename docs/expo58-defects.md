@@ -173,6 +173,10 @@ and playback follow need device checks.
 - **Fixed in `footnote.tsx`:** the screen dispatches `footnoteClosed` from a `removed` listener, as upstream `c3e246d` does. `removed` fires after any removal (swipe, tap outside, back, navigating away) and not on mount. Keep the dispatch in `footnote.tsx`; do not add a second one in `_layout.tsx`.
 - Not run on a device yet.
 
+## Selection menu ignored the reader's top padding
+
+- **Fixed in `components/Epub.tsx`:** with a non-floating toolbar, the menu for selections, highlights and saved-word taps used the toolbar height instead of `readerTop`. That dropped the reader's 24 pixels of top padding, and in the rail layout it used a stale horizontal toolbar height, or 0. Both native readers report positions from the reader's own top edge and convert nothing, so this is the only place that converts them to screen positions. Not run on a device yet.
+
 ## Verification limits
 
 This investigation used source, Git history, the locked package sources, and
