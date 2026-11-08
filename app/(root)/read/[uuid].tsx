@@ -5,7 +5,6 @@ import { useEffect } from "react"
 import { Epub } from "@/components/Epub"
 import { LoadingView } from "@/components/LoadingView"
 import { useSpansFold } from "@/lib/pose"
-import { useIsFocused } from "@/hooks/useIsFocused"
 import { useIsNotBackground } from "@/hooks/useIsNotBackground"
 import { useAppDispatch, useAppSelector } from "@/store/appState"
 import { useGetBookQuery } from "@/store/localApi"
@@ -23,7 +22,6 @@ export default function BookScreen() {
   const { data: book } = useGetBookQuery({ uuid })
   const locator = book?.position?.locator
 
-  const isFocused = useIsFocused()
   const segments = useSegments()
   const isReaderSheetOpen =
     segments.includes("navigation-menu") ||
@@ -35,12 +33,11 @@ export default function BookScreen() {
   const isAudioLoading = useAppSelector(
     (state) => state.bookshelf.isAudioLoading,
   )
-  const showEpub =
-    !!book &&
-    !!locator &&
-    (isFocused || isReaderSheetOpen) &&
-    isNotBackground &&
-    !isAudioLoading
+  // The reader is only ever covered by the sheets this screen pushes on top of
+  // itself, and leaving it pops the screen. Gating on focus tore the reader
+  // down while a sheet was closing, because the sheet's route disappears before
+  // focus returns, which rebuilt the EPUB view on every close.
+  const showEpub = !!book && !!locator && isNotBackground && !isAudioLoading
 
   useEffect(() => {
     dispatch(bookshelfSlice.actions.bookOpened({ bookUuid: uuid, format }))
