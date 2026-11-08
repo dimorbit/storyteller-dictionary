@@ -8,7 +8,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     owner: "storyteller-platform",
-    name: IS_DEV ? "Storyteller (dev)" : "Storyteller",
+    name: IS_DEV ? "Storyteller Dictionary (dev)" : "Storyteller Dictionary",
     slug: "storyteller",
     version: packageInfo.version,
     icon: "./assets/Storyteller_Logo.png",
@@ -165,8 +165,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ios: {
       supportsTablet: true,
       bundleIdentifier: IS_DEV
-        ? "dev.smoores.Storyteller.dev"
-        : "dev.smoores.Storyteller",
+        ? "dev.dictionary.storyteller.dev"
+        : "dev.dictionary.storyteller",
       config: {
         usesNonExemptEncryption: false,
       },
@@ -193,8 +193,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: IS_DEV
-        ? "dev.smoores.Storyteller.dev"
-        : "dev.smoores.Storyteller",
+        ? "dev.dictionary.storyteller.dev"
+        : "dev.dictionary.storyteller",
       adaptiveIcon: {
         foregroundImage: "./assets/Storyteller_Logo.png",
         backgroundColor: "#ffffff",

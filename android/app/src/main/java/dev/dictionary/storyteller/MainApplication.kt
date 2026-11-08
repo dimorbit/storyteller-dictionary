@@ -1,4 +1,4 @@
-package dev.smoores.Storyteller
+package dev.dictionary.storyteller
 import com.facebook.react.common.assets.ReactFontManager
 
 import android.app.Application

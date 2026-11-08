@@ -63,3 +63,4 @@ Thumbs.db
 
 # iOS project is not part of this Android build copy
 /ios
+android/keystore.properties

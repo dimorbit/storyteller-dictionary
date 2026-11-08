@@ -1,4 +1,4 @@
-package dev.smoores.Storyteller
+package dev.dictionary.storyteller
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
