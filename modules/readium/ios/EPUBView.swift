@@ -613,6 +613,11 @@ class EPUBView: ExpoView {
 
         navigator.delegate = self
         addSubview(navigator.view)
+        let touchObserver = UILongPressGestureRecognizer(target: self, action: #selector(readerDidTouch))
+        touchObserver.minimumPressDuration = 0
+        touchObserver.cancelsTouchesInView = false
+        touchObserver.delegate = self
+        navigator.view.addGestureRecognizer(touchObserver)
         self.navigator = navigator
 
         self.decorateHighlights()
@@ -764,6 +769,13 @@ class EPUBView: ExpoView {
         jumpPositionTask = nil
     }
 
+    @objc private func readerDidTouch(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, pendingJumpLocator != nil || jumpPositionTask != nil else { return }
+        pendingJumpLocator = nil
+        pendingJumpReady = false
+        cancelJumpPosition()
+    }
+
     func go(locator: Locator, scrollAfterNavigation: Bool = false) {
         cancelJumpPosition()
         let generation = jumpGeneration
@@ -805,26 +817,32 @@ class EPUBView: ExpoView {
 
         jumpPositionTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.jumpGeneration == generation { self.jumpPositionTask = nil }
+            }
             func isCurrent() -> Bool {
                 !Task.isCancelled && self.jumpGeneration == generation &&
                     self.navigator === navigator &&
                     navigator.currentLocation?.href.isEquivalentTo(locator.href) == true &&
                     self.props?.isPlaying == false && self.props?.scrollMode == true
             }
-            let scrollTolerance = 2
+            let maxPlacementMs = 500.0
+            let startedAt = ProcessInfo.processInfo.systemUptime
             let landingResult = await navigator.evaluateJavaScript(
-                "(document.scrollingElement || document.documentElement).scrollTop"
+                "(function() { return { top: (document.scrollingElement || document.documentElement).scrollTop, time: performance.now() }; })()"
             )
             guard case .success(let landingValue) = landingResult,
-                  let landingTop = (landingValue as? NSNumber)?.doubleValue, landingTop.isFinite else { return }
-            // Advance this only by our own corrections, not tolerated reader movement.
-            var expectedTop = landingTop
+                  let landing = landingValue as? [String: Any],
+                  let landingTop = (landing["top"] as? NSNumber)?.doubleValue, landingTop.isFinite,
+                  let landingTime = (landing["time"] as? NSNumber)?.doubleValue, landingTime.isFinite,
+                  isCurrent(), ProcessInfo.processInfo.systemUptime - startedAt <= maxPlacementMs / 1000 else { return }
 
             func measure(_ barBottom: Double, expectedTop: Double) async -> (moved: Bool, top: Double?) {
                 let result = await navigator.evaluateJavaScript("""
                     (function() {
                         const scroller = document.scrollingElement || document.documentElement;
-                        if (Math.abs(scroller.scrollTop - \(expectedTop)) > \(scrollTolerance)) return { moved: true };
+                        const elapsed = performance.now() - \(landingTime);
+                        if (elapsed < 0 || elapsed > \(maxPlacementMs) || scroller.scrollTop !== \(expectedTop)) return { moved: true };
                         const locator = \(locatorJson);
                         const body = document.body;
                         const normalize = (text) => text.replace(/\\s+/g, ' ').trim();
@@ -931,7 +949,7 @@ class EPUBView: ExpoView {
                             : preferred;
                         const target = \(barBottom) + clearance;
                         const initialTop = scroller.scrollTop;
-                        if (Math.abs(initialTop - \(expectedTop)) > \(scrollTolerance)) return { moved: true };
+                        if (initialTop !== \(expectedTop) || performance.now() - \(landingTime) > \(maxPlacementMs)) return { moved: true };
                         const behavior = scroller.style.getPropertyValue('scroll-behavior');
                         const priority = scroller.style.getPropertyPriority('scroll-behavior');
                         scroller.style.setProperty('scroll-behavior', 'auto', 'important');
@@ -947,13 +965,13 @@ class EPUBView: ExpoView {
                                     const padding = parseFloat(getComputedStyle(body).paddingTop) || 0;
                                     body.style.setProperty('padding-top', (padding - nextTop) + 'px', 'important');
                                     current = firstRect();
-                                    if (!current) return false;
+                                    if (!current) return { expectedTop: scroller.scrollTop };
                                     delta = current.top - target;
                                     nextTop = scroller.scrollTop + delta;
                                 }
                                 scroller.scrollTop = Math.max(0, nextTop);
                             }
-                            return { expectedTop: \(expectedTop) + scroller.scrollTop - initialTop };
+                            return { expectedTop: scroller.scrollTop };
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');
@@ -968,70 +986,33 @@ class EPUBView: ExpoView {
             }
 
             try? await Task.sleep(nanoseconds: 32_000_000)
-            for _ in 0..<20 {
-                guard isCurrent() else { return }
-                if let barBottom = self.props?.jumpBarBottom, barBottom > 0 {
-                    let measured = await measure(barBottom, expectedTop: expectedTop)
-                    guard isCurrent(), !measured.moved else { return }
-                    if let measuredTop = measured.top {
-                        expectedTop = measuredTop
-                        for _ in 0..<2 {
-                            try? await Task.sleep(nanoseconds: 50_000_000)
-                            guard isCurrent(), let currentBottom = self.props?.jumpBarBottom,
-                                  currentBottom > 0 else { return }
-                            let rechecked = await measure(currentBottom, expectedTop: expectedTop)
-                            guard isCurrent(), !rechecked.moved else { return }
-                            if let recheckedTop = rechecked.top { expectedTop = recheckedTop }
-                        }
-                        return
-                    }
-                }
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
+            guard isCurrent(), ProcessInfo.processInfo.systemUptime - startedAt <= maxPlacementMs / 1000,
+                  let barBottom = self.props?.jumpBarBottom, barBottom > 0 else { return }
+            let measured = await measure(barBottom, expectedTop: landingTop)
+            guard isCurrent(), !measured.moved, measured.top == nil,
+                  self.props?.jumpBarBottom == barBottom,
+                  ProcessInfo.processInfo.systemUptime - startedAt <= maxPlacementMs / 1000 else { return }
 
-            guard isCurrent(), let barBottom = self.props?.jumpBarBottom, barBottom > 0 else { return }
-            let result = await navigator.evaluateJavaScript("""
-                (function() {
-                    const scroller = document.scrollingElement || document.documentElement;
-                    const initialTop = scroller.scrollTop;
-                    if (Math.abs(initialTop - \(landingTop)) > \(scrollTolerance)) return null;
-                    const move = \(barBottom) + 2;
-                    if (document.body && initialTop < move) {
-                        const padding = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
-                        document.body.style.setProperty('padding-top', (padding + move - initialTop) + 'px', 'important');
-                    }
-                    const behavior = scroller.style.getPropertyValue('scroll-behavior');
-                    const priority = scroller.style.getPropertyPriority('scroll-behavior');
-                    scroller.style.setProperty('scroll-behavior', 'auto', 'important');
-                    try {
-                        scroller.scrollTop = Math.max(0, initialTop - move);
-                        return {
-                            top: scroller.scrollTop,
-                            expectedTop: \(landingTop) + scroller.scrollTop - initialTop
-                        };
-                    } finally {
-                        if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
-                        else scroller.style.removeProperty('scroll-behavior');
-                    }
-                })()
-                """)
-            guard isCurrent(), case .success(let value) = result,
-                  let fallback = value as? [String: Any],
-                  let fallbackTop = (fallback["top"] as? NSNumber)?.doubleValue,
-                  let expectedFallbackTop = (fallback["expectedTop"] as? NSNumber)?.doubleValue,
-                  fallbackTop.isFinite, expectedFallbackTop.isFinite else { return }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard isCurrent(), (self.props?.jumpBarBottom ?? 0) > 0 else { return }
             _ = await navigator.evaluateJavaScript("""
                 (function() {
                     const scroller = document.scrollingElement || document.documentElement;
-                    if (Math.abs(scroller.scrollTop - \(expectedFallbackTop)) > \(scrollTolerance)) return;
-                    if (Math.abs(scroller.scrollTop - \(fallbackTop)) <= 1) return;
+                    const initialTop = scroller.scrollTop;
+                    const elapsed = performance.now() - \(landingTime);
+                    if (elapsed < 0 || elapsed > \(maxPlacementMs) || initialTop !== \(landingTop)) return;
+                    const nextTop = Math.max(0, initialTop - (\(barBottom) + 2));
+                    if (nextTop === initialTop || !document.body) return;
+                    const content = document.createRange();
+                    content.selectNodeContents(document.body);
+                    if (Array.from(content.getClientRects()).some((rect) =>
+                        rect.width > 0 && rect.height > 0 && rect.right > 0 &&
+                        rect.left < window.innerWidth && rect.bottom > \(barBottom) && rect.top < window.innerHeight
+                    )) return;
+                    if (scroller.scrollTop !== \(landingTop) || performance.now() - \(landingTime) > \(maxPlacementMs)) return;
                     const behavior = scroller.style.getPropertyValue('scroll-behavior');
                     const priority = scroller.style.getPropertyPriority('scroll-behavior');
                     scroller.style.setProperty('scroll-behavior', 'auto', 'important');
                     try {
-                        scroller.scrollTop = \(fallbackTop);
+                        scroller.scrollTop = nextTop;
                     } finally {
                         if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                         else scroller.style.removeProperty('scroll-behavior');
