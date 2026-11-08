@@ -151,8 +151,9 @@ back by a fixed 48 pixels. React passes `jumpBarBottom`, the bar's bottom edge
 relative to the reader, not a scroll distance. After navigation, a temporary,
 invisible Readium decoration resolves the saved quote to a DOM range. The
 highlight and its before/after context must identify one occurrence; the first
-rendered text rectangle gives the line's top. The reader places that top 8
-logical pixels below the bar. A missing, ambiguous, or unrendered quote gets no
+rendered text rectangle gives the line's top. The clearance is half the computed
+line height (or text-rect height if unavailable), with an 8-logical-pixel floor.
+A missing, ambiguous, or unrendered quote gets no
 extra adjustment. Fragment centering is skipped for paused text jumps but is
 unchanged for playback follow. The temporary group reads the range stored by
 the Readium decorator ([Android 3.1.2](https://github.com/readium/kotlin-toolkit/blob/3.1.2/readium/navigator/src/main/assets/_scripts/src/decorator.js),
