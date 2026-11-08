@@ -148,7 +148,6 @@ export default function NavigationMenuLayout() {
           />
           <Tabs.Screen
             name="dictionary"
-            initialParams={params}
             options={{
               title: "Dictionary",
               tabBarIcon: ({ color, focused }) => (

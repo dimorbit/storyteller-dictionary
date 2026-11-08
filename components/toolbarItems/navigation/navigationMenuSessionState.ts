@@ -1,3 +1,5 @@
+import { type UUID } from "@/uuid"
+
 export type NavigationMenuTab =
   | "toc"
   | "bookmarks"
@@ -43,4 +45,22 @@ export function getLastDictionaryScope() {
 
 export function setLastDictionaryScope(scope: DictionaryScope) {
   lastDictionaryScope = scope
+}
+
+export type NavigationMenuParams = {
+  uuid?: UUID
+  format?: "readaloud" | "ebook" | "audiobook"
+  mode?: "text" | "audio"
+}
+
+// Tabs reached with a plain tab press get no route params, so the opener
+// records what the menu was opened with.
+let lastNavigationMenuParams: NavigationMenuParams = {}
+
+export function getLastNavigationMenuParams() {
+  return lastNavigationMenuParams
+}
+
+export function setLastNavigationMenuParams(params: NavigationMenuParams) {
+  lastNavigationMenuParams = params
 }
