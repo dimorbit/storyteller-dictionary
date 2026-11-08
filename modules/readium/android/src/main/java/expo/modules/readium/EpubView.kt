@@ -24,6 +24,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -239,6 +240,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     private data class PendingLocatorEcho(val locator: Locator, val emittedAtMs: Long)
     // Read the bar position when the destination page reports; it can change during a jump.
     private var pendingJumpLocator: Locator? = null
+    private var jumpPositionJob: Job? = null
 
     // Locators this view emitted that the reader has not sent back yet, oldest first. The
     // reader sends each one back as the locator prop, sometimes after newer ones were
@@ -653,8 +655,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             )
 
         props = finalProps
-        if (finalProps.isPlaying) {
+        if (finalProps.isPlaying || (oldProps?.scrollMode == true && !finalProps.scrollMode) ||
+            (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0)
+        ) {
             pendingJumpLocator = null
+            cancelJumpPosition()
         }
         // Changing the overlay alone must not run navigation or playback follow.
         if (oldProps != null && finalProps.jumpBarBottom != oldProps.jumpBarBottom &&
@@ -839,6 +844,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     fun destroyNavigator() {
         pendingJumpLocator = null
+        cancelJumpPosition()
         locationEmitter?.cancel()
         locationEmitter = null
 
@@ -1010,7 +1016,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         )
     }
 
+    private fun cancelJumpPosition() {
+        jumpPositionJob?.cancel()
+        jumpPositionJob = null
+    }
+
     fun go(locator: Locator, scrollAfterNavigation: Boolean = false) {
+        cancelJumpPosition()
         // Null when finalizeProps rebuilt the navigator but the publication did not load.
         val navigator = navigator ?: return
         val fragment = locator.locations.fragments.firstOrNull()
@@ -1954,109 +1966,229 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
     }
 
+    private fun positionJump(jump: Locator) {
+        val nav = navigator ?: return
+        jumpPositionJob = activity?.lifecycleScope?.launch {
+            fun isCurrent(): Boolean =
+                isActive && navigator === nav && nav.currentLocator.value.href == jump.href &&
+                    props?.isPlaying == false && props?.scrollMode == true
+
+            delay(32L)
+            suspend fun measure(barBottom: Double): Boolean = runCatching {
+                nav.evaluateJavascript(
+                    """
+                    (function() {
+                        const locator = ${jump.toJSON()};
+                        const body = document.body;
+                        const normalize = (text) => text.replace(/\s+/g, ' ').trim();
+                        const quote = normalize(locator.text?.highlight || '');
+                        if (!body || !quote) return false;
+
+                        const raw = body.textContent || '';
+                        const text = normalize(raw);
+                        const before = normalize(locator.text.before || '');
+                        const after = normalize(locator.text.after || '');
+                        let onlyMatch = -1;
+                        let matchCount = 0;
+                        let contextualMatch = -1;
+                        let contextualCount = 0;
+                        for (let i = text.indexOf(quote); i !== -1; i = text.indexOf(quote, i + 1)) {
+                            onlyMatch = i;
+                            matchCount++;
+                            const beforeEnd = i > 0 && text[i - 1] === ' ' ? i - 1 : i;
+                            const afterStart = i + quote.length + (text[i + quote.length] === ' ' ? 1 : 0);
+                            if ((!before || text.endsWith(before, beforeEnd)) &&
+                                (!after || text.startsWith(after, afterStart))) {
+                                contextualMatch = i;
+                                contextualCount++;
+                            }
+                        }
+                        let uniqueWord = false;
+                        if (matchCount === 1) {
+                            const wordCharacter = /[\p{L}\p{N}\p{M}\p{Pc}]/u;
+                            const characters = Array.from(quote);
+                            const previous = Array.from(text.slice(Math.max(0, onlyMatch - 2), onlyMatch)).pop() || '';
+                            const next = Array.from(text.slice(onlyMatch + quote.length, onlyMatch + quote.length + 2))[0] || '';
+                            uniqueWord = !(wordCharacter.test(characters[0]) && wordCharacter.test(previous)) &&
+                                !(wordCharacter.test(characters[characters.length - 1]) && wordCharacter.test(next));
+                        }
+                        const match = contextualCount === 1 ? contextualMatch : uniqueWord ? onlyMatch : -1;
+                        if (match === -1) return false;
+
+                        // Map the normalized match back to offsets in the unmodified DOM text.
+                        const tokens = /\S+/g;
+                        let token;
+                        let normalizedOffset = 0;
+                        let hasToken = false;
+                        let rawStart = -1;
+                        let rawEnd = -1;
+                        while ((token = tokens.exec(raw))) {
+                            if (hasToken) normalizedOffset++;
+                            const tokenEnd = normalizedOffset + token[0].length;
+                            if (match >= normalizedOffset && match < tokenEnd) {
+                                rawStart = token.index + match - normalizedOffset;
+                            }
+                            const end = match + quote.length;
+                            if (end > normalizedOffset && end <= tokenEnd) {
+                                rawEnd = token.index + end - normalizedOffset;
+                                break;
+                            }
+                            normalizedOffset = tokenEnd;
+                            hasToken = true;
+                        }
+                        if (rawStart < 0 || rawEnd < 0) return false;
+
+                        const range = document.createRange();
+                        const nodes = document.createNodeIterator(body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION);
+                        let offset = 0;
+                        let foundStart = false;
+                        let foundEnd = false;
+                        for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
+                            const nextOffset = offset + node.length;
+                            if (!foundStart && rawStart < nextOffset) {
+                                range.setStart(node, rawStart - offset);
+                                foundStart = true;
+                            }
+                            if (foundStart && rawEnd <= nextOffset) {
+                                range.setEnd(node, rawEnd - offset);
+                                foundEnd = true;
+                                break;
+                            }
+                            offset = nextOffset;
+                        }
+                        if (!foundEnd || normalize(range.toString()) !== quote) return false;
+                        const firstRect = () => Array.from(range.getClientRects()).find(
+                            (rect) => rect.width > 0 && rect.height > 0
+                        );
+                        const rect = firstRect();
+                        if (!rect) return false;
+
+                        const preceding = document.createRange();
+                        preceding.selectNodeContents(body);
+                        preceding.setEnd(range.startContainer, range.startOffset);
+                        let previousBottom = -Infinity;
+                        for (const previous of preceding.getClientRects()) {
+                            if (previous.width > 0 && previous.height > 0 &&
+                                previous.top < rect.top - 1 && previous.bottom <= rect.top + 1) {
+                                previousBottom = Math.max(previousBottom, previous.bottom);
+                            }
+                        }
+                        const element = range.startContainer.parentElement;
+                        const computedLineHeight = element ? parseFloat(getComputedStyle(element).lineHeight) : NaN;
+                        const lineHeight = Number.isFinite(computedLineHeight) && computedLineHeight > 0
+                            ? computedLineHeight : rect.height;
+                        const preferred = Math.max(8, lineHeight / 2);
+                        // Keep the preceding line behind the bar as well as the quote below it.
+                        const clearance = Number.isFinite(previousBottom)
+                            ? Math.max(0, Math.min(preferred, (rect.top - previousBottom) / 2))
+                            : preferred;
+                        const target = $barBottom + clearance;
+                        const scroller = document.scrollingElement || document.documentElement;
+                        const behavior = scroller.style.getPropertyValue('scroll-behavior');
+                        const priority = scroller.style.getPropertyPriority('scroll-behavior');
+                        scroller.style.setProperty('scroll-behavior', 'auto', 'important');
+                        try {
+                            for (let i = 0; i < 2; i++) {
+                                let current = firstRect();
+                                if (!current) return false;
+                                let delta = current.top - target;
+                                if (Math.abs(delta) <= 1) break;
+                                let nextTop = scroller.scrollTop + delta;
+                                if (nextTop < 0) {
+                                    // Keep this space until the resource unloads so dismissing the bar moves nothing.
+                                    const padding = parseFloat(getComputedStyle(body).paddingTop) || 0;
+                                    body.style.setProperty('padding-top', (padding - nextTop) + 'px', 'important');
+                                    current = firstRect();
+                                    if (!current) return false;
+                                    delta = current.top - target;
+                                    nextTop = scroller.scrollTop + delta;
+                                }
+                                scroller.scrollTop = Math.max(0, nextTop);
+                            }
+                            return true;
+                        } finally {
+                            if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
+                            else scroller.style.removeProperty('scroll-behavior');
+                        }
+                    })()
+                    """.trimIndent()
+                ) == "true"
+            }.getOrDefault(false)
+
+            repeat(20) {
+                if (!isCurrent()) return@launch
+                val barBottom = props?.jumpBarBottom ?: 0.0
+                if (barBottom > 0.0 && measure(barBottom)) {
+                    repeat(2) {
+                        delay(50L)
+                        if (!isCurrent()) return@launch
+                        val currentBottom = props?.jumpBarBottom ?: 0.0
+                        if (currentBottom <= 0.0) return@launch
+                        measure(currentBottom)
+                    }
+                    return@launch
+                }
+                delay(50L)
+            }
+
+            if (!isCurrent()) return@launch
+            val barBottom = props?.jumpBarBottom ?: 0.0
+            if (barBottom <= 0.0) return@launch
+            val fallbackTop = runCatching {
+                nav.evaluateJavascript(
+                    """
+                    (function() {
+                        const scroller = document.scrollingElement || document.documentElement;
+                        const initialTop = scroller.scrollTop;
+                        const move = $barBottom + 2;
+                        if (document.body && initialTop < move) {
+                            const padding = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+                            document.body.style.setProperty('padding-top', (padding + move - initialTop) + 'px', 'important');
+                        }
+                        const behavior = scroller.style.getPropertyValue('scroll-behavior');
+                        const priority = scroller.style.getPropertyPriority('scroll-behavior');
+                        scroller.style.setProperty('scroll-behavior', 'auto', 'important');
+                        try {
+                            scroller.scrollTop = Math.max(0, initialTop - move);
+                            return scroller.scrollTop;
+                        } finally {
+                            if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
+                            else scroller.style.removeProperty('scroll-behavior');
+                        }
+                    })()
+                    """.trimIndent()
+                )?.toDoubleOrNull()
+            }.getOrNull() ?: return@launch
+            if (!fallbackTop.isFinite()) return@launch
+            delay(50L)
+            if (!isCurrent() || (props?.jumpBarBottom ?: 0.0) <= 0.0) return@launch
+            runCatching {
+                nav.evaluateJavascript(
+                    """
+                    (function() {
+                        const scroller = document.scrollingElement || document.documentElement;
+                        if (Math.abs(scroller.scrollTop - $fallbackTop) <= 1) return;
+                        const behavior = scroller.style.getPropertyValue('scroll-behavior');
+                        const priority = scroller.style.getPropertyPriority('scroll-behavior');
+                        scroller.style.setProperty('scroll-behavior', 'auto', 'important');
+                        try {
+                            scroller.scrollTop = $fallbackTop;
+                        } finally {
+                            if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
+                            else scroller.style.removeProperty('scroll-behavior');
+                        }
+                    })()
+                    """.trimIndent()
+                )
+            }
+        }
+    }
+
     override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
         val jump = pendingJumpLocator
         if (jump != null && locator.href == jump.href) {
             pendingJumpLocator = null
-            activity?.lifecycleScope?.launch {
-                val barBottom = props?.jumpBarBottom ?: 0.0
-                if (props?.isPlaying != false || barBottom <= 0.0) return@launch
-                navigator?.evaluateJavascript(
-                    """
-                    (function() {
-                        if (!globalThis.readium || !readium.getDecorations ||
-                            !readium.registerDecorationTemplates) return false;
-                        const locator = ${jump.toJSON()};
-                        const normalize = (text) => text.replace(/\s+/g, ' ').trim();
-                        const quote = normalize(locator.text.highlight);
-                        if (!quote) return false;
-                        const text = normalize(document.body.textContent || '');
-                        const before = normalize(locator.text.before || '');
-                        const after = normalize(locator.text.after || '');
-                        let match = -1;
-                        for (let i = text.indexOf(quote); i !== -1; i = text.indexOf(quote, i + 1)) {
-                            const beforeEnd = i > 0 && text[i - 1] === ' ' ? i - 1 : i;
-                            const afterStart = i + quote.length + (text[i + quote.length] === ' ' ? 1 : 0);
-                            if ((before && !text.endsWith(before, beforeEnd)) ||
-                                (after && !text.startsWith(after, afterStart))) continue;
-                            if (match !== -1) return false;
-                            match = i;
-                        }
-                        if (match === -1) return false;
-
-                        // Readium stores its resolved DOM range on each decoration item.
-                        readium.registerDecorationTemplates({
-                            'storyteller-jump-measure': { layout: 'bounds', width: 'wrap' }
-                        });
-                        const group = readium.getDecorations('storyteller-jump-measure');
-                        const scroller = document.scrollingElement || document.documentElement;
-                        let lineTop;
-                        let clearance;
-                        try {
-                            group.add({
-                                id: 'jump', locator, style: 'storyteller-jump-measure',
-                                element: '<span></span>'
-                            });
-                            const range = group.items[0]?.range;
-                            if (!range) return false;
-                            const rangeText = range.toString();
-                            if (normalize(rangeText) !== quote) return false;
-                            const preceding = document.createRange();
-                            preceding.selectNodeContents(document.body);
-                            preceding.setEnd(range.startContainer, range.startOffset);
-                            const prefix = normalize(preceding.toString());
-                            const start = prefix.length + (prefix && text[prefix.length] === ' ' ? 1 : 0);
-                            if (start !== match) return false;
-
-                            // Surrounding whitespace can have a rectangle on another line.
-                            const quoteStart = rangeText.search(/\S/);
-                            const quoteEnd = rangeText.trimEnd().length;
-                            const quoteRange = range.cloneRange();
-                            const nodes = document.createNodeIterator(
-                                range.commonAncestorContainer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION
-                            );
-                            let offset = 0;
-                            let foundStart = false;
-                            let foundEnd = false;
-                            for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
-                                if (!range.intersectsNode(node)) continue;
-                                const from = node === range.startContainer ? range.startOffset : 0;
-                                const to = node === range.endContainer ? range.endOffset : node.length;
-                                const nextOffset = offset + to - from;
-                                if (!foundStart && quoteStart < nextOffset) {
-                                    quoteRange.setStart(node, from + quoteStart - offset);
-                                    foundStart = true;
-                                }
-                                if (foundStart && quoteEnd <= nextOffset) {
-                                    quoteRange.setEnd(node, from + quoteEnd - offset);
-                                    foundEnd = true;
-                                    break;
-                                }
-                                offset = nextOffset;
-                            }
-                            if (!foundEnd || normalize(quoteRange.toString()) !== quote) return false;
-                            const rect = Array.from(quoteRange.getClientRects()).find(
-                                (rect) => rect.width > 0 && rect.height > 0
-                            );
-                            if (!rect) return false;
-                            lineTop = scroller.scrollTop + rect.top;
-                            const element = quoteRange.startContainer.parentElement;
-                            const computedLineHeight = element
-                                ? parseFloat(getComputedStyle(element).lineHeight)
-                                : NaN;
-                            const lineHeight = Number.isFinite(computedLineHeight) && computedLineHeight > 0
-                                ? computedLineHeight
-                                : rect.height;
-                            clearance = Math.max(8, lineHeight / 2);
-                        } finally {
-                            group.clear();
-                        }
-                        scroller.scrollTop = Math.max(0, lineTop - $barBottom - clearance);
-                        return true;
-                    })();
-                    """.trimIndent()
-                )
-            }
+            positionJump(jump)
         }
 
         // Readium calls this whenever it recomputes the current page, not only when the

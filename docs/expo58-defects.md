@@ -146,19 +146,14 @@ with that fragment moved into the metadata; stored words are not migrated.
 Genuine fragments remain in the locator. Old and new saved-word jumps, audio
 seeking, and playback follow still need a device check.
 
-Scroll-mode landings are now measured on Android and iOS, rather than moved
-back by a fixed 48 pixels. React passes `jumpBarBottom`, the bar's bottom edge
-relative to the reader, not a scroll distance. After navigation, a temporary,
-invisible Readium decoration resolves the saved quote to a DOM range. The
-highlight and its before/after context must identify one occurrence; the first
-rendered text rectangle gives the line's top. The clearance is half the computed
-line height (or text-rect height if unavailable), with an 8-logical-pixel floor.
-A missing, ambiguous, or unrendered quote gets no
-extra adjustment. Fragment centering is skipped for paused text jumps but is
-unchanged for playback follow. The temporary group reads the range stored by
-the Readium decorator ([Android 3.1.2](https://github.com/readium/kotlin-toolkit/blob/3.1.2/readium/navigator/src/main/assets/_scripts/src/decorator.js),
-[iOS 3.6.0](https://github.com/readium/swift-toolkit/blob/3.6.0/Sources/Navigator/EPUB/Scripts/src/decorator.js)).
-The measured rectangle is the quote's own line, not the start of Readium's resolved range.
+Scroll-mode landings are measured on Android and iOS rather than moved by a
+fixed 48 pixels. React passes `jumpBarBottom`, the bar's bottom edge relative to
+the reader, not a scroll distance. Fragment centering is skipped for paused text
+jumps but is unchanged for playback follow.
+
+The old page callback could race Readium's locator load; it discarded measurement failures and never checked for a later scroll.
+Placement now retries a verified DOM quote range and rechecks the line; if measurement fails, it shifts Readium's landing by the bar height, adding top padding if needed.
+The device cause is still unconfirmed: neither an early exit nor an overwritten scroll has been observed here.
 
 The in-flow toolbar puts the bar bottom 16 pixels inside the reader; a floating
 toolbar places it at its measured bottom plus 40 pixels, less the top safe
@@ -166,9 +161,9 @@ inset. The vertical rail puts it 40 pixels below the reader's top. The rail is
 iOS-only, so its native reader now handles the same measurement. The bar still
 overlays rather than resizes the page, and showing or hiding it alone does not
 move the text. The bar position is read after navigation; if a floating
-toolbar has not been measured yet, there is no adjustment. A reader sheet may
-hide the overlay without changing the landing. At resource boundaries the
-available scroll can clamp the result. These landings, the rail, audio seeking,
+toolbar has not been measured yet, the placement retries briefly. A reader
+sheet may hide the overlay without changing the landing. At the end of a
+resource the available scroll can clamp the result. These landings, the rail, audio seeking,
 and playback follow need device checks.
 
 ## Footnote sheet keeps the reader covered after it closes
