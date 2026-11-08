@@ -151,18 +151,18 @@ fixed 48 pixels. React passes `jumpBarBottom`, the bar's bottom edge relative to
 the reader, not a scroll distance. Fragment centering is skipped for paused text
 jumps but is unchanged for playback follow.
 
-The old page callback could race Readium's locator load; it discarded measurement failures and never checked for a later scroll.
-Placement now retries a verified DOM quote range and rechecks the line; if measurement fails, it shifts Readium's landing by the bar height, adding top padding if needed.
-Late corrections are abandoned once the reader has moved.
-The device cause is still unconfirmed: neither an early exit nor an overwritten scroll has been observed here.
+Placement now makes at most one early measured correction or a clamped fallback;
+reader input or any scroll change cancels it, and there are no delayed rechecks.
+The fallback adds no padding, and dismissal cancels placement without removing
+the measured landing's padding. Both behaviors still need a device check.
 
 The in-flow toolbar puts the bar bottom 16 pixels inside the reader; a floating
 toolbar places it at its measured bottom plus 40 pixels, less the top safe
 inset. The vertical rail puts it 40 pixels below the reader's top. The rail is
 iOS-only, so its native reader now handles the same measurement. The bar still
 overlays rather than resizes the page, and showing or hiding it alone does not
-move the text. The bar position is read after navigation; if a floating
-toolbar has not been measured yet, the placement retries briefly. A reader
+move the text. The bar position is read after navigation; placement is skipped
+if the floating toolbar has not yet been measured. A reader
 sheet may hide the overlay without changing the landing. At the end of a
 resource the available scroll can clamp the result. These landings, the rail, audio seeking,
 and playback follow need device checks.
