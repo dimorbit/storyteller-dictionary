@@ -237,8 +237,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     private var changingResource = false
 
     private data class PendingLocatorEcho(val locator: Locator, val emittedAtMs: Long)
-    private data class PendingJumpInset(val locator: Locator, val inset: Double)
-    private var pendingJumpInset: PendingJumpInset? = null
+    // Read the inset when the destination page reports; at jump time it can be stale or zero.
+    private var pendingJumpLocator: Locator? = null
 
     // Locators this view emitted that the reader has not sent back yet, oldest first. The
     // reader sends each one back as the locator prop, sometimes after newer ones were
@@ -649,8 +649,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             )
 
         props = finalProps
-        if (finalProps.isPlaying || finalProps.jumpTopInset <= 0.0) {
-            pendingJumpInset = null
+        if (finalProps.isPlaying) {
+            pendingJumpLocator = null
         }
         // Changing the overlay alone must not run navigation or playback follow.
         if (oldProps != null && finalProps.jumpTopInset != oldProps.jumpTopInset &&
@@ -834,7 +834,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun destroyNavigator() {
-        pendingJumpInset = null
+        pendingJumpLocator = null
         locationEmitter?.cancel()
         locationEmitter = null
 
@@ -1032,9 +1032,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         if (locator.href != navigator.currentLocator.value.href) {
             changingResource = true
         }
-        val inset = props?.jumpTopInset ?: 0.0
-        pendingJumpInset = if (scrollAfterNavigation && props?.isPlaying == false && inset > 0.0) {
-            PendingJumpInset(navigationLocator, inset)
+        pendingJumpLocator = if (scrollAfterNavigation && props?.isPlaying == false) {
+            navigationLocator
         } else {
             null
         }
@@ -1950,23 +1949,24 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
-        val jump = pendingJumpInset
-        if (jump != null && locator.href == jump.locator.href) {
-            pendingJumpInset = null
+        val jump = pendingJumpLocator
+        if (jump != null && locator.href == jump.href) {
+            pendingJumpLocator = null
             activity?.lifecycleScope?.launch {
-                if (props?.isPlaying != false || props?.jumpTopInset != jump.inset) return@launch
+                val inset = props?.jumpTopInset ?: 0.0
+                if (props?.isPlaying != false || inset <= 0.0) return@launch
                 val alignText = if (
-                    !jump.locator.text.highlight.isNullOrBlank() &&
-                    jump.locator.locations.fragments.isEmpty()
+                    !jump.text.highlight.isNullOrBlank() &&
+                    jump.locations.fragments.isEmpty()
                 ) {
-                    "readium.scrollToLocator(${jump.locator.toJSON()});"
+                    "readium.scrollToLocator(${jump.toJSON()});"
                 } else ""
                 navigator?.evaluateJavascript(
                     """
                     (function() {
                         $alignText
                         const scroller = document.scrollingElement || document.documentElement;
-                        scroller.scrollTop = Math.max(0, scroller.scrollTop - ${jump.inset});
+                        scroller.scrollTop = Math.max(0, scroller.scrollTop - $inset);
                     })();
                     """.trimIndent()
                 )

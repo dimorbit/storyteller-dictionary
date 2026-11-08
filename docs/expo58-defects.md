@@ -170,6 +170,11 @@ earlier check; floating lands the word below the toolbar and bar; rail shows
 the bar at the top, clear of the rail buttons, and hides it under a reader
 sheet.
 
+The saved-word jump reads the inset when Readium reports the destination page,
+not when the jump starts. The return place and toolbar measurement can change
+around the jump, so a value taken at jump time may be zero or stale, and the old
+equality check then dropped the scroll-back.
+
 ## Footnote sheet keeps the reader covered after it closes
 
 - **Fork cause identified:** the merge (`2413a03`) kept the fork's plain WebView `app/(root)/footnote.tsx` (`66480e9` and later), which never dispatches `footnoteClosed`. The fork's only dispatch was a `beforeRemove` listener on the footnote screen in `app/(root)/_layout.tsx`. The merge resolved that file to upstream's version, which has no footnote listener, so nothing dispatched the close.
