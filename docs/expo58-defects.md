@@ -153,6 +153,7 @@ jumps but is unchanged for playback follow.
 
 The old page callback could race Readium's locator load; it discarded measurement failures and never checked for a later scroll.
 Placement now retries a verified DOM quote range and rechecks the line; if measurement fails, it shifts Readium's landing by the bar height, adding top padding if needed.
+Late corrections are abandoned once the reader has moved.
 The device cause is still unconfirmed: neither an early exit nor an overwritten scroll has been observed here.
 
 The in-flow toolbar puts the bar bottom 16 pixels inside the reader; a floating
