@@ -873,6 +873,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         readaloudDecorationJob?.cancel()
         readaloudDecorationJob = null
+        readaloudDecorationGeneration++
         requestedReadaloudDecoration = null
         requestedReadaloudDecorationVersion = 0
         appliedReadaloudDecorationVersion = 0
@@ -1376,6 +1377,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // a newer one and pull the highlight back to the previous sentence.
     private val readaloudDecorationMutex = Mutex()
     private var readaloudDecorationJob: Job? = null
+    private var readaloudDecorationGeneration = 0
     private var requestedReadaloudDecoration: Decoration? = null
     private var requestedReadaloudDecorationVersion = 0
     private var appliedReadaloudDecorationVersion = 0
@@ -1604,7 +1606,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun applyReadaloudDecoration(locator: Locator) {
-        val id = locator.locations.fragments.firstOrNull() ?: return
+        // The readaloud mark is the only decoration in the overlay group. A stable
+        // id lets Readium move the existing mark to the new sentence instead of
+        // removing one mark and adding another on every clip.
+        if (locator.locations.fragments.firstOrNull() == null) return
 
         val style =
             if (props!!.readaloudDecoratorStyle == "underline") {
@@ -1612,7 +1617,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             } else {
                 Decoration.Style.Highlight(props!!.readaloudColor, isActive = true)
             }
-        requestReadaloudDecoration(Decoration(id, locator, style))
+        requestReadaloudDecoration(Decoration("storyteller-readaloud", locator, style))
     }
 
     fun clearReadaloudDecoration() {
@@ -1638,14 +1643,34 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val activity = appContext.currentActivity as? FragmentActivity ?: return
         readaloudDecorationJob = activity.lifecycleScope.launch {
             do {
+                val generation = readaloudDecorationGeneration
                 val version = requestedReadaloudDecorationVersion
                 val pending = requestedReadaloudDecoration
 
                 readaloudDecorationMutex.withLock {
-                    // A null navigator means the view is being rebuilt. Mark the request
-                    // done so this loop cannot spin; finalizeProps will ask again.
-                    navigator?.applyDecorations(listOfNotNull(pending), "overlay")
-                    appliedReadaloudDecorationVersion = version
+                    // A newer request may have arrived while this worker was waiting
+                    // for the previous paint. A rebuilt navigator invalidates the
+                    // whole request. Skip stale work and let the loop pick up the
+                    // newest request.
+                    if (generation != readaloudDecorationGeneration ||
+                        version != requestedReadaloudDecorationVersion
+                    ) {
+                        return@withLock
+                    }
+
+                    val nav = navigator
+                    if (nav == null) {
+                        // Nothing to paint while the view is being rebuilt. Mark this
+                        // request done, but forget it when it is still the newest one so
+                        // the next finalizeProps asks again instead of being deduped.
+                        appliedReadaloudDecorationVersion = version
+                        if (requestedReadaloudDecorationVersion == version) {
+                            requestedReadaloudDecoration = null
+                        }
+                    } else {
+                        nav.applyDecorations(listOfNotNull(pending), "overlay")
+                        appliedReadaloudDecorationVersion = version
+                    }
                 }
             } while (appliedReadaloudDecorationVersion != requestedReadaloudDecorationVersion)
         }
