@@ -15,6 +15,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.WebView
 import androidx.annotation.ColorInt
 import androidx.core.graphics.toColorInt
 import androidx.fragment.app.FragmentActivity
@@ -269,10 +270,16 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
     private var layoutRequests = 0L
+    private val webViews = LinkedHashSet<WebView>()
+    private val webViewScrollPositions = mutableMapOf<WebView, Pair<Int, Int>>()
 
     fun beginSelection() {
         isSelecting = true
         selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 500
+        webViewScrollPositions.clear()
+        for (webView in webViews) {
+            webViewScrollPositions[webView] = webView.scrollX to webView.scrollY
+        }
     }
 
     fun endSelection() {
@@ -851,6 +858,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         lastDictionarySearchHref = null
         dictionaryOccurrences = listOf()
+        webViews.clear()
+        webViewScrollPositions.clear()
 
         val listener = this
         val epubFragment = EpubFragment(
@@ -934,6 +943,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         decoratedDictionaryHref = null
         lastDictionarySearchHref = null
         dictionaryOccurrences = listOf()
+        webViews.clear()
+        webViewScrollPositions.clear()
 
         val navigator = this.navigator ?: return
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
@@ -959,6 +970,20 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // for the pager and every page WebView.
     private fun disableOverscroll(view: View) {
         view.overScrollMode = View.OVER_SCROLL_NEVER
+        if (view is WebView && webViews.add(view)) {
+            // Chromium auto-scrolls the page while a selection handle is dragged
+            // near an edge. In the first paragraph that scroll changes the text
+            // under the focus many times a second. Pin the page while selecting;
+            // the handle can still move within the visible page.
+            val webView = view
+            webView.setOnScrollChangeListener { _, _, _, _, _ ->
+                if (!isSelecting) return@setOnScrollChangeListener
+                val position = webViewScrollPositions[webView] ?: return@setOnScrollChangeListener
+                if (webView.scrollX != position.first || webView.scrollY != position.second) {
+                    webView.scrollTo(position.first, position.second)
+                }
+            }
+        }
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) {
                 disableOverscroll(view.getChildAt(i))
