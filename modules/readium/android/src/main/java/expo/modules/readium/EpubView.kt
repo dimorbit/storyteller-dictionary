@@ -12,6 +12,8 @@ import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import androidx.annotation.ColorInt
 import androidx.core.graphics.toColorInt
@@ -837,6 +839,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         navigator = epubFragment.navigator
         // The fragment was created with these initial preferences already applied.
         submittedPreferences = layoutPreferences()
+        navigator?.publicationView?.let { disableOverscroll(it) }
 
         decorateHighlights()
         decorateDictionaryEntries()
@@ -918,6 +921,19 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         if (current === this) {
             current = null
+        }
+    }
+
+    // Selecting the first paragraph can drag a handle past the top of the page.
+    // The WebView then overscrolls and briefly paints the window background (the
+    // gray flash) while the content moves under the finger. Turn overscroll off
+    // for the pager and every page WebView.
+    private fun disableOverscroll(view: View) {
+        view.overScrollMode = View.OVER_SCROLL_NEVER
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                disableOverscroll(view.getChildAt(i))
+            }
         }
     }
 
@@ -2069,6 +2085,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     override fun onPageLoaded() {
         injectCustomFonts()
+        navigator?.publicationView?.let { disableOverscroll(it) }
 
         if (!firstPageLoaded.isCompleted) {
             firstPageLoaded.complete(Unit)
