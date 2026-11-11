@@ -5,7 +5,6 @@ import { BookA } from "lucide-react-native"
 import {
   Pressable,
   StyleSheet,
-  TouchableOpacity,
   View,
   useWindowDimensions,
 } from "react-native"
@@ -196,12 +195,6 @@ export function SelectionMenu({
           </Pressable>
         )}
       </View>
-      <TouchableOpacity
-        accessibilityLabel="Close selection menu"
-        accessibilityRole="button"
-        style={styles.backdrop}
-        onPress={onClose}
-      />
     </>
   )
 }
@@ -219,14 +212,6 @@ const styles = StyleSheet.create({
       height: 2,
     },
     shadowColor: "black",
-  },
-  backdrop: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 2,
   },
   button: {
     width: 24,
