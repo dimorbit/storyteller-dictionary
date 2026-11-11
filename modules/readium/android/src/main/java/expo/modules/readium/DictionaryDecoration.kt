@@ -110,6 +110,8 @@ fun storytellerDecorationTemplates(): HtmlDecorationTemplates {
                     box-sizing: border-box;
                     border: 0;
                     pointer-events: none;
+                    user-select: none;
+                    -webkit-user-select: none;
                     margin: 0 -1px 0 0;
                     background-image: radial-gradient(
                         circle closest-side,
