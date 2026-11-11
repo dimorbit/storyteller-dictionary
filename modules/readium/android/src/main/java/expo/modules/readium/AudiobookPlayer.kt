@@ -1429,6 +1429,12 @@ class AudiobookPlayer(
                         clipMap["start"] as? Double ?: (clipMap["start"] as Int).toDouble(),
                         clipMap["end"] as? Double ?: (clipMap["end"] as Int).toDouble(),
                     )
+                    // A scheduled message can be delivered after a seek has already
+                    // moved playback past its clip. Applying it would pull the reader
+                    // and the highlight back to the old sentence, so ignore it. The
+                    // small lead allows for the position being read a moment early.
+                    val position = controller.currentPosition / 1000.0
+                    if (position < clip.start - 0.5 || position >= clip.end) return@future result
                     listener.onClipChanged(
                         clip, BookService.buildFragmentLocator(
                             bookUuid,

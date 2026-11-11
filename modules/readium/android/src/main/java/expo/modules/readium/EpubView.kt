@@ -871,6 +871,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         locationEmitter?.cancel()
         locationEmitter = null
 
+        readaloudDecorationJob?.cancel()
+        readaloudDecorationJob = null
+        requestedReadaloudDecoration = null
+        requestedReadaloudDecorationVersion = 0
+        appliedReadaloudDecorationVersion = 0
+
         dictionarySearchJob?.cancel()
         dictionarySearchJob = null
         dictionaryDecorationJob?.cancel()
@@ -1365,6 +1371,15 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     private var dictionaryDecorationPending = false
     private var decoratedDictionaryHref: Url? = null
 
+    // The readaloud highlight is one decoration that changes on every clip. It is
+    // applied through a single worker so a slow, older application cannot land after
+    // a newer one and pull the highlight back to the previous sentence.
+    private val readaloudDecorationMutex = Mutex()
+    private var readaloudDecorationJob: Job? = null
+    private var requestedReadaloudDecoration: Decoration? = null
+    private var requestedReadaloudDecorationVersion = 0
+    private var appliedReadaloudDecorationVersion = 0
+
     private fun dictionaryCacheKey(bookUuid: String, href: Url): String = "$bookUuid|$href"
 
     // A changed set of saved words makes the marks found so far stale, so the
@@ -1597,18 +1612,42 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             } else {
                 Decoration.Style.Highlight(props!!.readaloudColor, isActive = true)
             }
-        val decoration = Decoration(id, locator, style)
-
-        val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
-        activity?.lifecycleScope?.launch {
-            navigator?.applyDecorations(listOf(decoration), "overlay")
-        }
+        requestReadaloudDecoration(Decoration(id, locator, style))
     }
 
     fun clearReadaloudDecoration() {
-        val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
-        activity?.lifecycleScope?.launch {
-            navigator?.applyDecorations(listOf(), "overlay")
+        requestReadaloudDecoration(null)
+    }
+
+    // Readium diffs a decoration group against the list it last received. Two
+    // applications started close together read each other's lists, and their
+    // JavaScript commands can land in the opposite order, leaving the readaloud
+    // highlight on an older sentence. Keep one worker and let it paint the newest
+    // request, so the last clip always wins.
+    private fun requestReadaloudDecoration(decoration: Decoration?) {
+        if (
+            requestedReadaloudDecorationVersion == appliedReadaloudDecorationVersion &&
+            requestedReadaloudDecoration == decoration
+        ) return
+
+        requestedReadaloudDecoration = decoration
+        requestedReadaloudDecorationVersion++
+
+        if (readaloudDecorationJob?.isActive == true) return
+
+        val activity = appContext.currentActivity as? FragmentActivity ?: return
+        readaloudDecorationJob = activity.lifecycleScope.launch {
+            do {
+                val version = requestedReadaloudDecorationVersion
+                val pending = requestedReadaloudDecoration
+
+                readaloudDecorationMutex.withLock {
+                    // A null navigator means the view is being rebuilt. Mark the request
+                    // done so this loop cannot spin; finalizeProps will ask again.
+                    navigator?.applyDecorations(listOfNotNull(pending), "overlay")
+                    appliedReadaloudDecorationVersion = version
+                }
+            } while (appliedReadaloudDecorationVersion != requestedReadaloudDecorationVersion)
         }
     }
 
