@@ -181,12 +181,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // See: https://github.com/readium/kotlin-toolkit/discussions/737
     override fun requestLayout() {
         super.requestLayout()
+        val now = SystemClock.elapsedRealtime()
+        val skip = isSelecting || now < selectionLayoutHoldUntil
+        Log.i(
+            "StorytellerSelection",
+            "requestLayout #${++layoutRequests} selecting=$isSelecting hold=${selectionLayoutHoldUntil - now} skip=$skip"
+        )
         // While a selection handle is moving, the WebView asks for layout on
         // every selection update. Force-laying out the whole reader here makes
         // the selection range snap to the paragraph and start over, many times
         // a second. The WebView can keep its own layout until the action mode
         // ends.
-        if (isSelecting || SystemClock.elapsedRealtime() < selectionLayoutHoldUntil) return
+        if (skip) return
         post {
             measureAndLayoutRecursively(this)
         }
@@ -262,6 +268,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
+    private var layoutRequests = 0L
 
     fun beginSelection() {
         isSelecting = true
@@ -680,6 +687,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun finalizeProps() {
+        if (isSelecting) Log.i("StorytellerSelection", "finalizeProps while selecting")
         val oldProps = props
 
         val finalProps =
@@ -2061,10 +2069,17 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     @JavascriptInterface
     fun handleSelectionCleared() {
         if (System.currentTimeMillis() < ignoreSelectionClearedUntil) return
+        Log.i("StorytellerSelection", "selection cleared")
         onSelection(mapOf("cleared" to true))
     }
 
     private suspend fun onLocatorChanged(locator: Locator) {
+        if (isSelecting) {
+            Log.i(
+                "StorytellerSelection",
+                "locatorChanged while selecting href=${locator.href} progression=${locator.locations.progression}"
+            )
+        }
         findOnPage(locator)
 
         // Only a new chapter needs searching. This fires on the first page load and
@@ -2360,6 +2375,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
+        Log.i("StorytellerSelection", "pageChanged index=$pageIndex total=$totalPages")
         val jump = pendingJumpLocator
         if (jump != null && locator.href == jump.href) {
             pendingJumpLocator = null
