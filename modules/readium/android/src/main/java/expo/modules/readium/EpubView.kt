@@ -181,6 +181,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // See: https://github.com/readium/kotlin-toolkit/discussions/737
     override fun requestLayout() {
         super.requestLayout()
+        // While a selection handle is moving, the WebView asks for layout on
+        // every selection update. Force-laying out the whole reader here makes
+        // the selection range snap to the paragraph and start over, many times
+        // a second. The WebView can keep its own layout until the action mode
+        // ends.
+        if (isSelecting || SystemClock.elapsedRealtime() < selectionLayoutHoldUntil) return
         post {
             measureAndLayoutRecursively(this)
         }
@@ -253,6 +259,21 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     val onShowFootnote by EventDispatcher()
 
     var navigator: EpubNavigatorFragment? = null
+
+    private var isSelecting: Boolean = false
+    private var selectionLayoutHoldUntil: Long = 0L
+
+    fun beginSelection() {
+        isSelecting = true
+        selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 500
+    }
+
+    fun endSelection() {
+        isSelecting = false
+        // The action mode can be recreated between handle moves. Hold the
+        // recursive layout briefly so it cannot reset the selection in that gap.
+        selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 200
+    }
     var player: AudiobookPlayer? = null
 
     var locationEmitter: Job? = null

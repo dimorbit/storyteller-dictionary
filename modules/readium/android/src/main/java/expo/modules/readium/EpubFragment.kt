@@ -29,6 +29,7 @@ import kotlin.math.ceil
 
 class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionModeCallback() {
     override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+        epubView.beginSelection()
         val activity: FragmentActivity? = epubView.appContext.currentActivity as FragmentActivity?
         activity?.lifecycleScope?.launch {
             val selection = epubView.navigator?.currentSelection() ?: return@launch
@@ -46,6 +47,11 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
         }
 
         return true
+    }
+
+    override fun onDestroyActionMode(mode: ActionMode) {
+        epubView.endSelection()
+        super.onDestroyActionMode(mode)
     }
 }
 
