@@ -1920,7 +1920,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
 
                 document.addEventListener('selectionchange', () => {
-                    if (document.getSelection().isCollapsed) {
+                    const selection = document.getSelection();
+                    const text = selection.isCollapsed
+                        ? ''
+                        : selection.toString().replace(/\s+/g, ' ').slice(0, 160);
+                    storytellerAPI.logSelection(text);
+                    if (selection.isCollapsed) {
                         storytellerAPI.handleSelectionCleared();
                     }
                 });
@@ -2064,6 +2069,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
             onDoubleTouch(locator.toJSON().toMap())
         }
+    }
+
+    @JavascriptInterface
+    fun logSelection(text: String) {
+        Log.i("StorytellerSelection", "js selection='$text'")
     }
 
     @JavascriptInterface
