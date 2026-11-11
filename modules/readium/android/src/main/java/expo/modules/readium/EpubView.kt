@@ -1606,9 +1606,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun applyReadaloudDecoration(locator: Locator) {
-        // The readaloud mark is the only decoration in the overlay group. A stable
-        // id lets Readium move the existing mark to the new sentence instead of
-        // removing one mark and adding another on every clip.
+        // The readaloud mark is the only decoration in the overlay group. The id
+        // stays the same within one chapter, so Readium moves the mark instead of
+        // removing and adding it on every clip. It changes when the chapter href
+        // changes, so Readium removes the old chapter's mark.
         if (locator.locations.fragments.firstOrNull() == null) return
 
         val style =
@@ -1617,7 +1618,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             } else {
                 Decoration.Style.Highlight(props!!.readaloudColor, isActive = true)
             }
-        requestReadaloudDecoration(Decoration("storyteller-readaloud", locator, style))
+        requestReadaloudDecoration(Decoration("storyteller-readaloud:${locator.href}", locator, style))
     }
 
     fun clearReadaloudDecoration() {
