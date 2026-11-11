@@ -68,3 +68,23 @@ or stops, or when another jump or a reopened book replaces it. It has no timer.
 
 A place whose clip the audio cannot find stays put only until the audio is paused. After you
 resume, the reader follows the audio again.
+
+## Readaloud sentence highlight jumping
+
+Written 2026-11-11.
+
+The readaloud highlight is a Readium decoration in the `overlay` group. Each clip
+change used to start a new coroutine that applied the whole group. Readium diffs a
+group against the list it last received, so two applications started close together
+could finish in the opposite order and leave the highlight on the previous sentence.
+The overlay is now applied through one worker that always paints the newest request.
+A pause still clears the overlay after any pending paint, and a destroyed navigator
+stops the worker.
+
+A scheduled clip message is also ignored when playback has already moved past that
+clip. A late message for the old sentence could otherwise pull the reader and the
+highlight backwards after a seek.
+
+The native module compiles, and an arm64 release APK was assembled. This change was
+not run on an emulator or a phone, so the first device check should play a readaloud
+through several sentence boundaries, seek forward and back, and pause and resume.
