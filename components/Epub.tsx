@@ -349,25 +349,34 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           <NavigationReturnControl bookUuid={book.uuid} />
         </HideableView>
       )}
-      {selection && (
-        <SelectionMenu
-          bookUuid={book.uuid}
-          x={selection.x + insets.left}
-          // Native positions are relative to the reader's own top edge.
-          y={selection.y + readerTop}
-          locator={selection.locator}
-          existingHighlight={activeHighlight}
-          dictionaryEntry={activeDictionaryEntry}
-          onDictionaryEntryDeleted={handleDictionaryEntryDeleted}
-          onClose={() => {
-            setSelection(null)
-            setActiveHighlight(null)
-            setActiveDictionaryEntryUuid(null)
-            setWashDecorationId(null)
-            clearNativeSelection()
-          }}
-        />
-      )}
+      {/* Keep this wrapper mounted so opening or closing the selection menu
+          never changes the reader's position in the React tree. Reordering the
+          reader remounts the native EPUB view, which reloads the WebView and
+          drops the live text selection. */}
+      <View
+        pointerEvents="box-none"
+        className="absolute top-0 right-0 bottom-0 left-0 z-10"
+      >
+        {selection && (
+          <SelectionMenu
+            bookUuid={book.uuid}
+            x={selection.x + insets.left}
+            // Native positions are relative to the reader's own top edge.
+            y={selection.y + readerTop}
+            locator={selection.locator}
+            existingHighlight={activeHighlight}
+            dictionaryEntry={activeDictionaryEntry}
+            onDictionaryEntryDeleted={handleDictionaryEntryDeleted}
+            onClose={() => {
+              setSelection(null)
+              setActiveHighlight(null)
+              setActiveDictionaryEntryUuid(null)
+              setWashDecorationId(null)
+              clearNativeSelection()
+            }}
+          />
+        )}
+      </View>
       <View
         className={cn("z-1 flex-1", {
           "pb-safe-or-2": floatingToolbar,

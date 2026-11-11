@@ -305,6 +305,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // @font-face rules for the fonts imported by the user, see injectCustomFonts()
     private var customFontsCss: String = ""
 
+    // The last preferences handed to the current navigator. Selection and menu
+    // updates re-run finalizeProps; submitting identical preferences again can
+    // reflow the WebView and drop the live text selection.
+    private var submittedPreferences: EpubPreferences? = null
+
     // Readium can only serve the font sources of `addFontFamilyDeclaration` from the app's
     // assets, so the fonts imported by the user are embedded as data URLs instead.
     private fun applyCustomFonts(customFonts: List<CustomFont>) {
@@ -459,7 +464,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         override fun submitModePreferences(view: EpubView, change: LayoutChange) {
             if (change.enteredPageLayout) {
-                view.navigator?.submitPreferences(view.epubPreferences(scroll = false))
+                view.submitPreferencesIfChanged(view.epubPreferences())
             }
         }
 
@@ -500,7 +505,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         ) = Unit
 
         override fun submitReadingPreferences(view: EpubView, change: LayoutChange) {
-            view.navigator?.submitPreferences(view.epubPreferences())
+            view.submitPreferencesIfChanged(view.epubPreferences())
         }
 
         override fun onTap(
@@ -527,7 +532,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             view.epubPreferences(scroll = true)
 
         override fun submitModePreferences(view: EpubView, change: LayoutChange) {
-            view.navigator?.submitPreferences(view.epubPreferences(scroll = true))
+            view.submitPreferencesIfChanged(view.epubPreferences(scroll = true))
         }
 
         override fun shouldNavigateToLocator(view: EpubView, change: LayoutChange): Boolean {
@@ -640,6 +645,15 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 textColor = org.readium.r2.navigator.preferences.Color(props.foreground),
             )
         }
+    }
+
+    // Comparing the whole EpubPreferences value covers every setting the navigator
+    // consumes, including ones added later, instead of a hand-kept field list.
+    private fun submitPreferencesIfChanged(preferences: EpubPreferences) {
+        val navigator = navigator ?: return
+        if (preferences == submittedPreferences) return
+        navigator.submitPreferences(preferences)
+        submittedPreferences = preferences
     }
 
     fun finalizeProps() {
@@ -821,6 +835,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         addView(epubFragment.view)
 
         navigator = epubFragment.navigator
+        // The fragment was created with these initial preferences already applied.
+        submittedPreferences = layoutPreferences()
 
         decorateHighlights()
         decorateDictionaryEntries()
@@ -868,6 +884,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     fun destroyNavigator() {
         pendingJumpLocator = null
         cancelJumpPosition()
+        submittedPreferences = null
         locationEmitter?.cancel()
         locationEmitter = null
 
