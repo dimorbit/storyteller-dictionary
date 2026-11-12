@@ -119,11 +119,12 @@ export function SelectionMenu({
   return (
     <>
       <View
+        pointerEvents="box-none"
         style={[
           styles.menu,
           {
             backgroundColor: background,
-            top: Math.max(y - 40, insets.top),
+            top: Math.max(y - 80, insets.top),
             left: leftOffset,
           },
         ]}
