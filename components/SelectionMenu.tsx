@@ -36,6 +36,10 @@ type Props = {
   y: number
   yBottom?: number | undefined
   locator: ReadiumLocator
+  getCurrentSelection: () => Promise<{
+    text: string
+    locator: ReadiumLocator
+  } | null>
   selectedText?: string
   existingHighlight?: UUID | null
   dictionaryEntry?: DictionaryEntry | null
@@ -49,6 +53,7 @@ export function SelectionMenu({
   y,
   yBottom,
   locator,
+  getCurrentSelection,
   selectedText: selectedTextProp,
   existingHighlight: highlightUuid,
   dictionaryEntry,
@@ -74,9 +79,6 @@ export function SelectionMenu({
   )
     ?.trim()
     .replace(/\s+/g, " ")
-  // Saved as the lookup key, so the word reads the same in the Dictionary tab
-  // whichever book it came from.
-  const cleanedWord = selectedText ? wordKey(selectedText) : ""
   const showDictionaryAction = !!dictionaryEntry || !!selectedText
   const numIcons =
     6 + (showDictionaryAction ? 1 : 0) + (existingHighlight ? 1 : 0)
@@ -96,6 +98,16 @@ export function SelectionMenu({
         )
       : aboveTop
 
+  // The menu's selection text and locator are from when the action mode was
+  // created. Read the live selection so a dragged handle is respected.
+  const currentSelection = async () => {
+    const current = await getCurrentSelection().catch(() => null)
+    return {
+      text: (current?.text ?? selectedText ?? "").trim().replace(/\s+/g, " "),
+      locator: current?.locator ?? locator,
+    }
+  }
+
   const handleDictionaryPress = async () => {
     if (dictionaryEntry) {
       try {
@@ -110,7 +122,11 @@ export function SelectionMenu({
       return
     }
 
-    if (!selectedText) return
+    const current = await currentSelection()
+    if (!current.text) return
+    // Saved as the lookup key, so the word reads the same in the Dictionary tab
+    // whichever book it came from.
+    const cleanedWord = wordKey(current.text)
 
     const timestamp = new Date().toISOString()
     try {
@@ -118,7 +134,7 @@ export function SelectionMenu({
         uuid: randomUUID(),
         bookUuid,
         word: cleanedWord,
-        locator,
+        locator: current.locator,
         createdAt: timestamp,
         updatedAt: timestamp,
       }).unwrap()
@@ -156,21 +172,25 @@ export function SelectionMenu({
               return
             }
 
-            createHighlight({
-              highlightId: randomUUID(),
-              color,
-              locator,
-              bookUuid,
-            })
-            onClose()
+            void (async () => {
+              const current = await currentSelection()
+              createHighlight({
+                highlightId: randomUUID(),
+                color,
+                locator: current.locator,
+                bookUuid,
+              })
+              onClose()
+            })()
           }}
         />
         <Pressable
           accessibilityLabel="Copy selected text"
           accessibilityRole="button"
           style={styles.copyButton}
-          onPress={() => {
-            Clipboard.setString(selectedText ?? "")
+          onPress={async () => {
+            const current = await currentSelection()
+            Clipboard.setString(current.text)
             onClose()
           }}
         >

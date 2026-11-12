@@ -264,6 +264,10 @@ class ReadiumModule : Module(), Listener {
                 view.clearSelection()
             }
 
+            AsyncFunction("getCurrentSelection") Coroutine { view: EpubView ->
+                return@Coroutine view.getCurrentSelection()
+            }
+
             AsyncFunction("getFragmentPageProportion") Coroutine { view: EpubView, fragmentId: String ->
                 return@Coroutine view.getFragmentPageProportion(fragmentId)
             }

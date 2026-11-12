@@ -1053,6 +1053,30 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     /**
+     * Read the selection as it is at the moment of the call, not when the action mode was
+     * created. The user can drag the handles after that, and the saved locator and text must
+     * follow the handles. The live DOM text covers selections that span paragraphs or frames.
+     */
+    suspend fun getCurrentSelection(): Map<String, Any>? {
+        val nav = navigator ?: return null
+        val selection = nav.currentSelection() ?: return null
+        val liveText = nav.evaluateJavascript(
+            "storyteller.getSelectionText ? storyteller.getSelectionText() : window.getSelection().toString()"
+        )?.let { result ->
+            runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
+        }?.takeIf { it.isNotBlank() }
+        val text = liveText ?: selection.locator.text.highlight.orEmpty()
+        val locator = if (liveText != null) {
+            selection.locator.copy(
+                text = selection.locator.text.copy(highlight = liveText)
+            )
+        } else {
+            selection.locator
+        }
+        return mapOf("text" to text, "locator" to locator.toJSON().toMap())
+    }
+
+    /**
      * Collapse the webview's native text selection, which also hides the selection box
      * and its handles. The app's selection menu draws a backdrop over the reader, so a
      * dismissing tap never reaches the webview and the selection would otherwise stay.
@@ -1961,6 +1985,20 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     }
                     window.addEventListener('scroll', selectionScrollPinHandler, { passive: false });
                 }
+
+                storyteller.getSelectionText = function() {
+                    let best = '';
+                    const visit = (win) => {
+                        try {
+                            const selection = win.getSelection ? win.getSelection() : null;
+                            const text = selection ? selection.toString() : '';
+                            if (text.length > best.length) best = text;
+                            for (let i = 0; i < win.frames.length; i++) visit(win.frames[i]);
+                        } catch (_) {}
+                    };
+                    visit(window);
+                    return best;
+                };
 
                 storyteller.pinSelectionScroll = function() {
                     const pin = globalThis.storyteller.selectionScrollPin;

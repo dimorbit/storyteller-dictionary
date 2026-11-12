@@ -320,6 +320,11 @@ export type EPUBViewRef = {
   goBackward: () => Promise<void>
   /** Collapse the webview's native text selection and hide its handles. */
   clearSelection: () => Promise<void>
+  /** The selection as it is now, after any handle drags since it was created. */
+  getCurrentSelection: () => Promise<{
+    text: string
+    locator: ReadiumLocator
+  } | null>
   getFragmentPageProportion: (
     fragmentId: string,
   ) => Promise<FragmentPageProportion | null>

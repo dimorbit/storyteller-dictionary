@@ -373,6 +373,9 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
                 : undefined
             }
             locator={selection.locator}
+            getCurrentSelection={() =>
+              epubViewRef.current?.getCurrentSelection() ?? Promise.resolve(null)
+            }
             selectedText={selection.selectedText}
             existingHighlight={activeHighlight}
             dictionaryEntry={activeDictionaryEntry}
