@@ -1944,6 +1944,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     threshold: [0],
                 })
 
+                if (!globalThis.storyteller.selectionScrollPin) {
+                    globalThis.storyteller.selectionScrollPin = { left: null };
+                    document.addEventListener('scroll', () => {
+                        const pin = globalThis.storyteller.selectionScrollPin;
+                        if (pin.left === null) return;
+                        const scroller = document.scrollingElement || document.documentElement;
+                        if (scroller.scrollLeft !== pin.left) {
+                            scroller.scrollLeft = pin.left;
+                        }
+                    }, true);
+                }
+
                 document.addEventListener('selectionchange', () => {
                     const selection = document.getSelection();
                     const anchor = selection.anchorNode;
@@ -1951,6 +1963,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     const anchorElement = anchor && anchor.nodeType === 1 ? anchor : anchor && anchor.parentElement;
                     const focusElement = focus && focus.nodeType === 1 ? focus : focus && focus.parentElement;
                     const scroller = document.scrollingElement || document.documentElement;
+                    const pin = globalThis.storyteller.selectionScrollPin;
+                    if (selection.isCollapsed) {
+                        pin.left = null;
+                    } else if (pin.left === null) {
+                        pin.left = scroller.scrollLeft;
+                    }
                     const text = selection.isCollapsed ? '' : selection.toString().replace(/\s+/g, ' ').slice(0, 160);
                     storytellerAPI.logSelection(JSON.stringify({
                         text,
@@ -1962,8 +1980,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         anchorTag: anchorElement ? anchorElement.tagName : '',
                         focusTag: focusElement ? focusElement.tagName : '',
                         scrollTop: scroller ? scroller.scrollTop : -1,
+                        scrollLeft: scroller ? scroller.scrollLeft : -1,
                         scrollY: window.scrollY,
-                        innerHeight: window.innerHeight
+                        scrollX: window.scrollX,
+                        innerHeight: window.innerHeight,
+                        visualOffsetLeft: window.visualViewport ? window.visualViewport.offsetLeft : -1,
+                        visualPageLeft: window.visualViewport ? window.visualViewport.pageLeft : -1
                     }));
                     if (selection.isCollapsed) {
                         storytellerAPI.handleSelectionCleared();
