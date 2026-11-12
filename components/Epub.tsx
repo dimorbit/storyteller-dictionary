@@ -56,6 +56,11 @@ import { NavigationReturnControl } from "./toolbarItems/navigation/NavigationRet
 import { Group } from "./ui/Group"
 import { HideableView } from "./ui/HideableView"
 
+// Temporary diagnostic: when false, native selection events are ignored and
+// the custom selection menu is never shown, so only the WebView's own
+// selection handles are active.
+const ENABLE_SELECTION_UI = false
+
 type Props = {
   book: BookWithRelations
   format: "readaloud" | "ebook"
@@ -358,7 +363,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
         pointerEvents="box-none"
         className="absolute top-0 right-0 bottom-0 left-0 z-10"
       >
-        {selection && (
+        {ENABLE_SELECTION_UI && selection && (
           <SelectionMenu
             bookUuid={book.uuid}
             x={selection.x + insets.left}
@@ -483,6 +488,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             )
           }}
           onSelection={(event) => {
+            if (!ENABLE_SELECTION_UI) return
             if ("cleared" in event.nativeEvent) {
               setSelection(null)
               setActiveDictionaryEntryUuid(null)

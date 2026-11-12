@@ -1946,10 +1946,25 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
                 document.addEventListener('selectionchange', () => {
                     const selection = document.getSelection();
-                    const text = selection.isCollapsed
-                        ? ''
-                        : selection.toString().replace(/\s+/g, ' ').slice(0, 160);
-                    storytellerAPI.logSelection(text);
+                    const anchor = selection.anchorNode;
+                    const focus = selection.focusNode;
+                    const anchorElement = anchor && anchor.nodeType === 1 ? anchor : anchor && anchor.parentElement;
+                    const focusElement = focus && focus.nodeType === 1 ? focus : focus && focus.parentElement;
+                    const scroller = document.scrollingElement || document.documentElement;
+                    const text = selection.isCollapsed ? '' : selection.toString().replace(/\s+/g, ' ').slice(0, 160);
+                    storytellerAPI.logSelection(JSON.stringify({
+                        text,
+                        collapsed: selection.isCollapsed,
+                        anchorOffset: selection.anchorOffset,
+                        focusOffset: selection.focusOffset,
+                        anchorId: anchorElement ? anchorElement.id : '',
+                        focusId: focusElement ? focusElement.id : '',
+                        anchorTag: anchorElement ? anchorElement.tagName : '',
+                        focusTag: focusElement ? focusElement.tagName : '',
+                        scrollTop: scroller ? scroller.scrollTop : -1,
+                        scrollY: window.scrollY,
+                        innerHeight: window.innerHeight
+                    }));
                     if (selection.isCollapsed) {
                         storytellerAPI.handleSelectionCleared();
                     }
