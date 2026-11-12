@@ -4,7 +4,6 @@ package expo.modules.readium
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.util.Log
 import android.view.ActionMode
 import android.view.Menu
 import android.view.View
@@ -29,19 +28,12 @@ import org.readium.r2.shared.publication.Publication
 import kotlin.math.ceil
 
 class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionModeCallback() {
-    private var actionModeCreations = 0
-
     override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
         epubView.beginSelection()
-        Log.i("StorytellerSelection", "actionMode create #${++actionModeCreations}")
         val activity: FragmentActivity? = epubView.appContext.currentActivity as FragmentActivity?
         activity?.lifecycleScope?.launch {
             val selection = epubView.navigator?.currentSelection() ?: return@launch
             selection.rect?.let {
-                val text = selection.locator.text.highlight
-                    ?.replace('\n', ' ')
-                    ?.take(120)
-                Log.i("StorytellerSelection", "selection rect=$it text='$text'")
                 val x = ceil(it.centerX() / epubView.resources.displayMetrics.density).toInt()
                 val y = ceil(it.top / epubView.resources.displayMetrics.density).toInt() - 16
                 val yBottom = ceil(it.bottom / epubView.resources.displayMetrics.density).toInt()
@@ -58,7 +50,6 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
 
         mode?.let { actionMode ->
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                android.util.Log.i("StorytellerSelection", "actionMode hide")
                 actionMode.hide(0)
             }
         }
@@ -67,7 +58,6 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
     }
 
     override fun onDestroyActionMode(mode: ActionMode) {
-        Log.i("StorytellerSelection", "actionMode destroy")
         epubView.endSelection()
         super.onDestroyActionMode(mode)
     }

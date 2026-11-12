@@ -184,10 +184,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         super.requestLayout()
         val now = SystemClock.elapsedRealtime()
         val skip = isSelecting || now < selectionLayoutHoldUntil
-        Log.i(
-            "StorytellerSelection",
-            "requestLayout #${++layoutRequests} selecting=$isSelecting hold=${selectionLayoutHoldUntil - now} skip=$skip"
-        )
         // While a selection handle is moving, the WebView asks for layout on
         // every selection update. Force-laying out the whole reader here makes
         // the selection range snap to the paragraph and start over, many times
@@ -269,7 +265,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
-    private var layoutRequests = 0L
     private val webViews = LinkedHashSet<WebView>()
     private val webViewScrollPositions = mutableMapOf<WebView, Pair<Int, Int>>()
 
@@ -280,6 +275,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         for (webView in webViews) {
             webViewScrollPositions[webView] = webView.scrollX to webView.scrollY
         }
+        // Capture the horizontal scroll before the first selectionchange event.
+        activity?.lifecycleScope?.launch {
+            navigator?.evaluateJavascript("storyteller.pinSelectionScroll && storyteller.pinSelectionScroll();")
+        }
     }
 
     fun endSelection() {
@@ -287,6 +286,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // The action mode can be recreated between handle moves. Hold the
         // recursive layout briefly so it cannot reset the selection in that gap.
         selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 200
+        activity?.lifecycleScope?.launch {
+            navigator?.evaluateJavascript("storyteller.unpinSelectionScroll && storyteller.unpinSelectionScroll();")
+        }
     }
     var player: AudiobookPlayer? = null
 
@@ -694,7 +696,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun finalizeProps() {
-        if (isSelecting) Log.i("StorytellerSelection", "finalizeProps while selecting")
         val oldProps = props
 
         val finalProps =
@@ -1946,22 +1947,33 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
                 if (!globalThis.storyteller.selectionScrollPin) {
                     globalThis.storyteller.selectionScrollPin = { left: null };
-                    document.addEventListener('scroll', () => {
+                    const selectionScrollPinHandler = () => {
                         const pin = globalThis.storyteller.selectionScrollPin;
                         if (pin.left === null) return;
                         const scroller = document.scrollingElement || document.documentElement;
                         if (scroller.scrollLeft !== pin.left) {
                             scroller.scrollLeft = pin.left;
                         }
-                    }, true);
+                    };
+                    document.addEventListener('scroll', selectionScrollPinHandler, true);
+                    if (document.scrollingElement) {
+                        document.scrollingElement.addEventListener('scroll', selectionScrollPinHandler, { passive: false });
+                    }
+                    window.addEventListener('scroll', selectionScrollPinHandler, { passive: false });
                 }
+
+                storyteller.pinSelectionScroll = function() {
+                    const pin = globalThis.storyteller.selectionScrollPin;
+                    const scroller = document.scrollingElement || document.documentElement;
+                    pin.left = scroller.scrollLeft;
+                };
+
+                storyteller.unpinSelectionScroll = function() {
+                    globalThis.storyteller.selectionScrollPin.left = null;
+                };
 
                 document.addEventListener('selectionchange', () => {
                     const selection = document.getSelection();
-                    const anchor = selection.anchorNode;
-                    const focus = selection.focusNode;
-                    const anchorElement = anchor && anchor.nodeType === 1 ? anchor : anchor && anchor.parentElement;
-                    const focusElement = focus && focus.nodeType === 1 ? focus : focus && focus.parentElement;
                     const scroller = document.scrollingElement || document.documentElement;
                     const pin = globalThis.storyteller.selectionScrollPin;
                     if (selection.isCollapsed) {
@@ -1969,24 +1981,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     } else if (pin.left === null) {
                         pin.left = scroller.scrollLeft;
                     }
-                    const text = selection.isCollapsed ? '' : selection.toString().replace(/\s+/g, ' ').slice(0, 160);
-                    storytellerAPI.logSelection(JSON.stringify({
-                        text,
-                        collapsed: selection.isCollapsed,
-                        anchorOffset: selection.anchorOffset,
-                        focusOffset: selection.focusOffset,
-                        anchorId: anchorElement ? anchorElement.id : '',
-                        focusId: focusElement ? focusElement.id : '',
-                        anchorTag: anchorElement ? anchorElement.tagName : '',
-                        focusTag: focusElement ? focusElement.tagName : '',
-                        scrollTop: scroller ? scroller.scrollTop : -1,
-                        scrollLeft: scroller ? scroller.scrollLeft : -1,
-                        scrollY: window.scrollY,
-                        scrollX: window.scrollX,
-                        innerHeight: window.innerHeight,
-                        visualOffsetLeft: window.visualViewport ? window.visualViewport.offsetLeft : -1,
-                        visualPageLeft: window.visualViewport ? window.visualViewport.pageLeft : -1
-                    }));
                     if (selection.isCollapsed) {
                         storytellerAPI.handleSelectionCleared();
                     }
@@ -2134,24 +2128,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     @JavascriptInterface
-    fun logSelection(text: String) {
-        Log.i("StorytellerSelection", "js selection='$text'")
-    }
-
-    @JavascriptInterface
     fun handleSelectionCleared() {
         if (System.currentTimeMillis() < ignoreSelectionClearedUntil) return
-        Log.i("StorytellerSelection", "selection cleared")
         onSelection(mapOf("cleared" to true))
     }
 
     private suspend fun onLocatorChanged(locator: Locator) {
-        if (isSelecting) {
-            Log.i(
-                "StorytellerSelection",
-                "locatorChanged while selecting href=${locator.href} progression=${locator.locations.progression}"
-            )
-        }
         findOnPage(locator)
 
         // Only a new chapter needs searching. This fires on the first page load and
@@ -2447,7 +2429,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
-        Log.i("StorytellerSelection", "pageChanged index=$pageIndex total=$totalPages")
         val jump = pendingJumpLocator
         if (jump != null && locator.href == jump.href) {
             pendingJumpLocator = null

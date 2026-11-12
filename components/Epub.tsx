@@ -56,10 +56,7 @@ import { NavigationReturnControl } from "./toolbarItems/navigation/NavigationRet
 import { Group } from "./ui/Group"
 import { HideableView } from "./ui/HideableView"
 
-// Temporary diagnostic: when false, native selection events are ignored and
-// the custom selection menu is never shown, so only the WebView's own
-// selection handles are active.
-const ENABLE_SELECTION_UI = false
+const ENABLE_SELECTION_UI = true
 
 type Props = {
   book: BookWithRelations
