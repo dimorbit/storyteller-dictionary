@@ -56,6 +56,13 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
             }
         }
 
+        mode?.let { actionMode ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.util.Log.i("StorytellerSelection", "actionMode hide")
+                actionMode.hide(0)
+            }
+        }
+
         return true
     }
 
