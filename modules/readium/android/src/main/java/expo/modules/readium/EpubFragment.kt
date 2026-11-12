@@ -44,11 +44,13 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
                 Log.i("StorytellerSelection", "selection rect=$it text='$text'")
                 val x = ceil(it.centerX() / epubView.resources.displayMetrics.density).toInt()
                 val y = ceil(it.top / epubView.resources.displayMetrics.density).toInt() - 16
+                val yBottom = ceil(it.bottom / epubView.resources.displayMetrics.density).toInt()
                 epubView.onSelection(
                     mapOf(
                         "locator" to selection.locator.toJSON().toMap(),
                         "x" to x,
-                        "y" to y
+                        "y" to y,
+                        "yBottom" to yBottom
                     )
                 )
             }

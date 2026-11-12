@@ -144,6 +144,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const [selection, setSelection] = useState<{
     x: number
     y: number
+    yBottom?: number
     locator: ReadiumLocator
   } | null>(null)
   const [toolbarHeight, setToolbarHeight] = useState(0)
@@ -363,6 +364,11 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             x={selection.x + insets.left}
             // Native positions are relative to the reader's own top edge.
             y={selection.y + readerTop}
+            yBottom={
+              selection.yBottom !== undefined
+                ? selection.yBottom + readerTop
+                : undefined
+            }
             locator={selection.locator}
             existingHighlight={activeHighlight}
             dictionaryEntry={activeDictionaryEntry}

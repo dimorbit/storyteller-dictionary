@@ -291,6 +291,7 @@ export type EPUBViewProps = {
       | {
           x: number
           y: number
+          yBottom?: number
           locator: ReadiumLocator
         }
       | { cleared: true }

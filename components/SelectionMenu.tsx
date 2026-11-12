@@ -34,6 +34,7 @@ type Props = {
   bookUuid: UUID
   x: number
   y: number
+  yBottom?: number | undefined
   locator: ReadiumLocator
   existingHighlight?: UUID | null
   dictionaryEntry?: DictionaryEntry | null
@@ -45,6 +46,7 @@ export function SelectionMenu({
   bookUuid,
   x,
   y,
+  yBottom,
   locator,
   existingHighlight: highlightUuid,
   dictionaryEntry,
@@ -77,6 +79,16 @@ export function SelectionMenu({
     16, // Minimum left padding
     Math.min(x - panelWidth / 2, dimensions.width - panelWidth - 16), // Prevent overflow on the right side
   )
+  const menuHeight = 40
+  const aboveTop = Math.max(y - 80, insets.top)
+  // If the menu cannot clear the top handle, put it below the selection instead.
+  const menuTop =
+    aboveTop + menuHeight > y - 8 && yBottom !== undefined
+      ? Math.min(
+          yBottom + 8,
+          dimensions.height - menuHeight - insets.bottom - 8,
+        )
+      : aboveTop
 
   const handleDictionaryPress = async () => {
     if (dictionaryEntry) {
@@ -124,7 +136,7 @@ export function SelectionMenu({
           styles.menu,
           {
             backgroundColor: background,
-            top: Math.max(y - 80, insets.top),
+            top: menuTop,
             left: leftOffset,
           },
         ]}
