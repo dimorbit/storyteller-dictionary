@@ -12,6 +12,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.commitNow
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import org.json.JSONTokener
 import org.readium.r2.navigator.epub.EpubDefaults
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
@@ -33,6 +34,15 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
         val activity: FragmentActivity? = epubView.appContext.currentActivity as FragmentActivity?
         activity?.lifecycleScope?.launch {
             val selection = epubView.navigator?.currentSelection() ?: return@launch
+            // The locator's highlight only carries the first paragraph of a selection
+            // that spans paragraphs, so read the full live selection text.
+            val liveText = epubView.navigator
+                ?.evaluateJavascript("window.getSelection().toString()")
+                ?.let { result ->
+                    runCatching { JSONTokener(result).nextValue() as? String }.getOrNull()
+                }
+            val selectedText = liveText?.takeIf { it.isNotBlank() }
+                ?: selection.locator.text.highlight.orEmpty()
             selection.rect?.let {
                 val x = ceil(it.centerX() / epubView.resources.displayMetrics.density).toInt()
                 val y = ceil(it.top / epubView.resources.displayMetrics.density).toInt() - 16
@@ -40,6 +50,7 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
                 epubView.onSelection(
                     mapOf(
                         "locator" to selection.locator.toJSON().toMap(),
+                        "selectedText" to selectedText,
                         "x" to x,
                         "y" to y,
                         "yBottom" to yBottom

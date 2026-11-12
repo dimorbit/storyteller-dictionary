@@ -36,6 +36,7 @@ type Props = {
   y: number
   yBottom?: number | undefined
   locator: ReadiumLocator
+  selectedText?: string
   existingHighlight?: UUID | null
   dictionaryEntry?: DictionaryEntry | null
   onDictionaryEntryDeleted: (entry: DictionaryEntry) => void
@@ -48,6 +49,7 @@ export function SelectionMenu({
   y,
   yBottom,
   locator,
+  selectedText: selectedTextProp,
   existingHighlight: highlightUuid,
   dictionaryEntry,
   onDictionaryEntryDeleted,
@@ -65,7 +67,11 @@ export function SelectionMenu({
     highlightUuid ? { uuid: highlightUuid } : skipToken,
   )
 
-  const selectedText = (existingHighlight?.locator ?? locator).text?.highlight
+  const selectedText = (
+    existingHighlight?.locator.text?.highlight ??
+    selectedTextProp ??
+    locator.text?.highlight
+  )
     ?.trim()
     .replace(/\s+/g, " ")
   // Saved as the lookup key, so the word reads the same in the Dictionary tab
@@ -164,11 +170,7 @@ export function SelectionMenu({
           accessibilityRole="button"
           style={styles.copyButton}
           onPress={() => {
-            Clipboard.setString(
-              (
-                existingHighlight?.locator ?? locator
-              ).text?.highlight?.toString() ?? "",
-            )
+            Clipboard.setString(selectedText ?? "")
             onClose()
           }}
         >

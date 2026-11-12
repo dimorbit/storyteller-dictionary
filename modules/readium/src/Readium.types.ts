@@ -293,6 +293,7 @@ export type EPUBViewProps = {
           y: number
           yBottom?: number
           locator: ReadiumLocator
+          selectedText?: string
         }
       | { cleared: true }
     >,

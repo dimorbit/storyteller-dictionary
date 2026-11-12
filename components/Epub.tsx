@@ -148,6 +148,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     y: number
     yBottom?: number
     locator: ReadiumLocator
+    selectedText?: string
   } | null>(null)
   const [toolbarHeight, setToolbarHeight] = useState(0)
 
@@ -372,6 +373,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
                 : undefined
             }
             locator={selection.locator}
+            selectedText={selection.selectedText}
             existingHighlight={activeHighlight}
             dictionaryEntry={activeDictionaryEntry}
             onDictionaryEntryDeleted={handleDictionaryEntryDeleted}
