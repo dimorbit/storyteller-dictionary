@@ -1442,7 +1442,12 @@ class AudiobookPlayer(
                     }
                     if (clipTrackIndex == null || clipTrackIndex == currentTrackIndex) {
                         val position = controller.currentPosition / 1000.0
-                        if (position < clip.start - 0.25 || position >= clip.end + 0.25) {
+                        // The tolerance is in media time, but dispatch delay is in wall time.
+                        // At 2x-3x speed, 0.25 s of media time is only 80-125 ms of wall time,
+                        // so scale it by the playback speed to keep valid clips from being dropped.
+                        val speed = controller.playbackParameters.speed.coerceAtLeast(1f)
+                        val tolerance = 0.25 * speed
+                        if (position < clip.start - tolerance || position >= clip.end + tolerance) {
                             return@future result
                         }
                     }
