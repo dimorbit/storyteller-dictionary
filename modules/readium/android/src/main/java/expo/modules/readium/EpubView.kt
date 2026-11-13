@@ -184,12 +184,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     override fun requestLayout() {
         super.requestLayout()
         val now = SystemClock.elapsedRealtime()
-        val skip = isSelecting || now < selectionLayoutHoldUntil
-        // While a selection handle is moving, the WebView asks for layout on
-        // every selection update. Force-laying out the whole reader here makes
-        // the selection range snap to the paragraph and start over, many times
-        // a second. The WebView can keep its own layout until the action mode
-        // ends.
+        // While a selection is active and the audio is paused, skip the forced
+        // recursive layout: the WebView asks for layout on every selection update
+        // and force-laying out the whole reader makes the selection snap. During
+        // playback the layout must run, otherwise the readaloud decoration cannot
+        // move and the reader does not recover after a rotation.
+        val playing = props?.isPlaying == true
+        val skip = !playing && (isSelecting || now < selectionLayoutHoldUntil)
         if (skip) return
         post {
             measureAndLayoutRecursively(this)
