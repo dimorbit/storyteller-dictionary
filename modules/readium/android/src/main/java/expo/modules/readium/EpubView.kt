@@ -758,6 +758,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             )
 
         props = finalProps
+        raLog("finalize isPlaying=${finalProps.isPlaying} locator=${finalProps.locator?.href} frags=${finalProps.locator?.locations?.fragments} oldPlaying=${oldProps?.isPlaying}")
         if (finalProps.isPlaying || (oldProps?.scrollMode == true && !finalProps.scrollMode) ||
             (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0)
         ) {
@@ -1758,11 +1759,15 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun applyReadaloudDecoration(locator: Locator) {
+        raLog("apply href=${locator.href} frags=${locator.locations.fragments}")
         // The readaloud mark is the only decoration in the overlay group. The id
         // stays the same within one chapter, so Readium moves the mark instead of
         // removing and adding it on every clip. It changes when the chapter href
         // changes, so Readium removes the old chapter's mark.
-        if (locator.locations.fragments.firstOrNull() == null) return
+        if (locator.locations.fragments.firstOrNull() == null) {
+            raLog("apply skipped: no fragments")
+            return
+        }
 
         val style =
             if (props!!.readaloudDecoratorStyle == "underline") {
@@ -1774,7 +1779,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun clearReadaloudDecoration() {
+        raLog("clear requested")
         requestReadaloudDecoration(null)
+    }
+
+    private fun raLog(message: String) {
+        Log.i("StorytellerRA", message)
     }
 
     // Readium diffs a decoration group against the list it last received. Two
@@ -1790,6 +1800,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         requestedReadaloudDecoration = decoration
         requestedReadaloudDecorationVersion++
+        raLog("request id=${decoration?.id} version=$requestedReadaloudDecorationVersion jobActive=${readaloudDecorationJob?.isActive}")
 
         if (readaloudDecorationJob?.isActive == true) return
 
@@ -1822,6 +1833,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         }
                     } else {
                         nav.applyDecorations(listOfNotNull(pending), "overlay")
+                        raLog("worker applied id=${pending?.id} version=$version")
                         appliedReadaloudDecorationVersion = version
                     }
                 }

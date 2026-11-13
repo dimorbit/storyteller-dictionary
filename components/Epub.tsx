@@ -8,6 +8,7 @@ import {
   StatusBar,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 
@@ -242,6 +243,46 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   // While a jump waits for the audio, the native view behaves as paused, so it
   // does not schedule page turns toward where the audio still is.
   const isJumpHeld = useAppSelector(getJumpHold)?.bookUuid === book.uuid
+
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions()
+  const orientation = windowWidth > windowHeight ? "landscape" : "portrait"
+
+  // Rotation dismisses the native selection; close the JS menu with it so no
+  // toolbar is left floating above an empty selection.
+  useEffect(() => {
+    setSelection(null)
+    setActiveHighlight(null)
+    setActiveDictionaryEntryUuid(null)
+    setWashDecorationId(null)
+    clearNativeSelection()
+  }, [orientation, clearNativeSelection])
+
+  // A jump hold only waits for the target clip. If that clip never reports,
+  // clear it so the reader follows the audio and readaloud resumes.
+  useEffect(() => {
+    if (!isJumpHeld) return
+
+    const timer = setTimeout(() => {
+      console.log("RA_JUMP_EXPIRED", book.uuid)
+      dispatch(bookshelfSlice.actions.jumpHoldExpired({ bookUuid: book.uuid }))
+    }, 3000)
+
+    return () => clearTimeout(timer)
+  }, [isJumpHeld, book.uuid, dispatch])
+
+  useEffect(() => {
+    console.log(
+      "RA_PROPS",
+      JSON.stringify({
+        isPlaying,
+        isJumpHeld,
+        href: locator?.href,
+        fragments: locator?.locations?.fragments,
+        progression: locator?.locations?.progression,
+        text: locator?.text?.highlight,
+      }),
+    )
+  }, [isPlaying, isJumpHeld, locator])
 
   const floatingToolbar = preferences?.floatingToolbar
   // Top padding of the reading area; the rail's return bar pins to it too.

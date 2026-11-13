@@ -289,6 +289,15 @@ startAppListening({
         )
       }
 
+      console.log(
+        "RA_CLIP",
+        JSON.stringify({
+          href: clip.locator.href,
+          fragments: clip.locator.locations?.fragments,
+          hold: hold?.bookUuid ?? null,
+        }),
+      )
+
       const locator = clip.locator
 
       const payload = {
