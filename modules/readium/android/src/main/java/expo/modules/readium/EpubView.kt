@@ -212,9 +212,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         val orientationChanged = (w > h) != (oldw > oldh)
-        if (orientationChanged && isSelecting) {
+        if (orientationChanged) {
             // Match the reader's rotation behaviour: a rotation dismisses the
-            // selection instead of leaving stale handles and a menu behind.
+            // selection and its system toolbar instead of leaving stale handles
+            // and a menu behind. The flags can be stale, so do this even when
+            // isSelecting is false.
+            selectionActionModeCallback?.finish()
             clearSelection()
             onSelection(mapOf("cleared" to true))
         }
@@ -292,6 +295,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
+    var selectionActionModeCallback: SelectionActionModeCallback? = null
     private val webViews = LinkedHashSet<WebView>()
     private val webViewScrollPositions = mutableMapOf<WebView, Pair<Int, Int>>()
 
@@ -1416,6 +1420,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         activity.lifecycleScope.launch {
             val result = getFragmentPageProportion(fragmentId) ?: return@launch
+            val beforePage = result["beforePage"] as? Boolean ?: false
+            if (beforePage) {
+                // A corrected clip can land on the page before the one on screen.
+                // The forward-only schedule below would leave its highlight invisible.
+                props?.locator?.let { go(it) }
+                return@launch
+            }
             val crossesPage = result["crossesPage"] as? Boolean ?: return@launch
             if (!crossesPage) return@launch
 
@@ -1759,7 +1770,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun applyReadaloudDecoration(locator: Locator) {
-        raLog("apply href=${locator.href} frags=${locator.locations.fragments}")
+        raLog("apply href=${locator.href} frags=${locator.locations.fragments} style=${props?.readaloudDecoratorStyle} color=${Integer.toHexString(props?.readaloudColor ?: 0)}")
         // The readaloud mark is the only decoration in the overlay group. The id
         // stays the same within one chapter, so Readium moves the mark instead of
         // removing and adding it on every clip. It changes when the chapter href
@@ -1833,7 +1844,31 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         }
                     } else {
                         nav.applyDecorations(listOfNotNull(pending), "overlay")
-                        raLog("worker applied id=${pending?.id} version=$version")
+                        val dom = nav.evaluateJavascript(
+                            """
+                            (function() {
+                                const els = Array.from(document.querySelectorAll('[data-group="overlay"] > div'));
+                                return JSON.stringify({
+                                    vh: window.innerHeight,
+                                    els: els.map((el) => {
+                                        const r = el.getBoundingClientRect();
+                                        const s = getComputedStyle(el);
+                                        return {
+                                            id: el.id,
+                                            top: Math.round(r.top),
+                                            left: Math.round(r.left),
+                                            width: Math.round(r.width),
+                                            height: Math.round(r.height),
+                                            bg: s.backgroundColor,
+                                            border: s.borderBottomColor,
+                                            opacity: s.opacity,
+                                        };
+                                    }),
+                                });
+                            })();
+                            """.trimIndent()
+                        )
+                        raLog("worker applied id=${pending?.id} version=$version dom=$dom")
                         appliedReadaloudDecorationVersion = version
                     }
                 }
@@ -2203,12 +2238,16 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     let visibleWidth = 0;
                     let totalWidth = 0;
                     let overflowsRight = false;
+                    let beforePage = true;
 
                     for (const rect of rects) {
                         totalWidth += rect.width;
 
                         if (rect.right > viewportWidth) {
                             overflowsRight = true;
+                        }
+                        if (rect.right > 0) {
+                            beforePage = false;
                         }
 
                         if (rect.left >= 0 && rect.right <= viewportWidth) {
@@ -2223,7 +2262,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     if (totalWidth === 0) return null;
 
                     const proportion = visibleWidth / totalWidth;
-                    return { crossesPage: overflowsRight, proportionOnCurrentPage: proportion };
+                    return { crossesPage: overflowsRight, beforePage, proportionOnCurrentPage: proportion };
                 };
 
                 document.body.firstElementChild.style.paddingLeft = "var(--st-padding-left)";

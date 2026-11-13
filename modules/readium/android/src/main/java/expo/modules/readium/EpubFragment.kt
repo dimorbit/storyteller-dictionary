@@ -29,7 +29,14 @@ import org.readium.r2.shared.publication.Publication
 import kotlin.math.ceil
 
 class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionModeCallback() {
+    private var currentActionMode: ActionMode? = null
+
+    init {
+        epubView.selectionActionModeCallback = this
+    }
+
     override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+        currentActionMode = mode
         epubView.beginSelection()
         val activity: FragmentActivity? = epubView.appContext.currentActivity as FragmentActivity?
         activity?.lifecycleScope?.launch {
@@ -69,8 +76,14 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
     }
 
     override fun onDestroyActionMode(mode: ActionMode) {
+        currentActionMode = null
         epubView.endSelection()
         super.onDestroyActionMode(mode)
+    }
+
+    fun finish() {
+        currentActionMode?.finish()
+        currentActionMode = null
     }
 }
 
