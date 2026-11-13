@@ -1085,12 +1085,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
         }?.takeIf { it.isNotBlank() }
         val text = liveText ?: selection.locator.text.highlight.orEmpty()
-        val locator = if (liveText != null) {
-            selection.locator.copy(
-                text = selection.locator.text.copy(highlight = liveText)
+        val locator = when {
+            liveText == null -> selection.locator
+            liveText == selection.locator.text.highlight -> selection.locator
+            // before/after come from the first block; a cross-block selection must not carry them.
+            else -> selection.locator.copy(
+                text = selection.locator.text.copy(before = null, after = null, highlight = liveText)
             )
-        } else {
-            selection.locator
         }
         return mapOf("text" to text, "locator" to locator.toJSON().toMap())
     }
