@@ -195,6 +195,24 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
     }
 
+    // endSelection() is the only other place that clears the selection flags, and it
+    // depends on the action mode callback. If that callback is missed, requestLayout
+    // would skip the recursive layout forever, so clear the flags on these lifecycle events too.
+    private fun resetSelectionLayout() {
+        isSelecting = false
+        selectionLayoutHoldUntil = 0L
+    }
+
+    override fun onDetachedFromWindow() {
+        resetSelectionLayout()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        resetSelectionLayout()
+        super.onSizeChanged(w, h, oldw, oldh)
+    }
+
     private fun cancelJumpForReaderInput() {
         if (pendingJumpLocator != null || jumpPositionJob?.isActive == true) {
             pendingJumpLocator = null
@@ -924,6 +942,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun destroyNavigator() {
+        resetSelectionLayout()
         pendingJumpLocator = null
         cancelJumpPosition()
         submittedPreferences = null
