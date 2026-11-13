@@ -223,8 +223,14 @@ export const bookshelfSlice = createSlice({
         state.jumpHold.target = target
       }
     },
-    jumpHoldExpired(state, action: PayloadAction<{ bookUuid: UUID }>) {
-      if (state.jumpHold?.bookUuid === action.payload.bookUuid) {
+    jumpHoldExpired(
+      state,
+      action: PayloadAction<{ bookUuid: UUID; timestamp: number }>,
+    ) {
+      if (
+        state.jumpHold?.bookUuid === action.payload.bookUuid &&
+        state.jumpHold.timestamp === action.payload.timestamp
+      ) {
         state.jumpHold = null
       }
     },

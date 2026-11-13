@@ -285,18 +285,12 @@ startAppListening({
         // native reader paused forever, which stops the readaloud highlight.
         if (Date.now() - hold.timestamp < 3000) return
         listenerApi.dispatch(
-          bookshelfSlice.actions.jumpHoldExpired({ bookUuid: hold.bookUuid }),
+          bookshelfSlice.actions.jumpHoldExpired({
+            bookUuid: hold.bookUuid,
+            timestamp: hold.timestamp,
+          }),
         )
       }
-
-      console.log(
-        "RA_CLIP",
-        JSON.stringify({
-          href: clip.locator.href,
-          fragments: clip.locator.locations?.fragments,
-          hold: hold?.bookUuid ?? null,
-        }),
-      )
 
       const locator = clip.locator
 

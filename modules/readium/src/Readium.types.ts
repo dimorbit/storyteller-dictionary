@@ -312,6 +312,7 @@ export type EPUBViewProps = {
 
 export type FragmentPageProportion = {
   crossesPage: boolean
+  beforePage?: boolean
   proportionOnCurrentPage: number
 }
 

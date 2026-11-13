@@ -211,17 +211,19 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        val orientationChanged = (w > h) != (oldw > oldh)
-        if (orientationChanged) {
+        val orientation = resources.configuration.orientation
+        val rotated = orientation != lastOrientation
+        lastOrientation = orientation
+        if (rotated) {
             // Match the reader's rotation behaviour: a rotation dismisses the
             // selection and its system toolbar instead of leaving stale handles
-            // and a menu behind. The flags can be stale, so do this even when
-            // isSelecting is false.
+            // and a menu behind. A foldable or split-screen resize keeps the
+            // same configuration orientation and must not clear a live selection.
             selectionActionModeCallback?.finish()
             clearSelection()
             onSelection(mapOf("cleared" to true))
+            resetSelectionLayout()
         }
-        resetSelectionLayout()
         super.onSizeChanged(w, h, oldw, oldh)
     }
 
@@ -295,6 +297,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
+    private var lastOrientation: Int = resources.configuration.orientation
     var selectionActionModeCallback: SelectionActionModeCallback? = null
     private val webViews = LinkedHashSet<WebView>()
     private val webViewScrollPositions = mutableMapOf<WebView, Pair<Int, Int>>()
@@ -762,7 +765,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             )
 
         props = finalProps
-        raLog("finalize isPlaying=${finalProps.isPlaying} locator=${finalProps.locator?.href} frags=${finalProps.locator?.locations?.fragments} oldPlaying=${oldProps?.isPlaying}")
         if (finalProps.isPlaying || (oldProps?.scrollMode == true && !finalProps.scrollMode) ||
             (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0)
         ) {
@@ -957,6 +959,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     fun destroyNavigator() {
         resetSelectionLayout()
+        selectionActionModeCallback = null
         pendingJumpLocator = null
         cancelJumpPosition()
         submittedPreferences = null
@@ -1393,6 +1396,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             val json = JSONObject(result)
             mapOf(
                 "crossesPage" to json.getBoolean("crossesPage"),
+                "beforePage" to json.optBoolean("beforePage", false),
                 "proportionOnCurrentPage" to json.getDouble("proportionOnCurrentPage")
             )
         } catch (e: Exception) {
@@ -1770,15 +1774,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun applyReadaloudDecoration(locator: Locator) {
-        raLog("apply href=${locator.href} frags=${locator.locations.fragments} style=${props?.readaloudDecoratorStyle} color=${Integer.toHexString(props?.readaloudColor ?: 0)}")
         // The readaloud mark is the only decoration in the overlay group. The id
         // stays the same within one chapter, so Readium moves the mark instead of
         // removing and adding it on every clip. It changes when the chapter href
         // changes, so Readium removes the old chapter's mark.
-        if (locator.locations.fragments.firstOrNull() == null) {
-            raLog("apply skipped: no fragments")
-            return
-        }
+        if (locator.locations.fragments.firstOrNull() == null) return
 
         val style =
             if (props!!.readaloudDecoratorStyle == "underline") {
@@ -1790,13 +1790,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun clearReadaloudDecoration() {
-        raLog("clear requested")
         requestReadaloudDecoration(null)
     }
 
-    private fun raLog(message: String) {
-        Log.i("StorytellerRA", message)
-    }
 
     // Readium diffs a decoration group against the list it last received. Two
     // applications started close together read each other's lists, and their
@@ -1811,7 +1807,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         requestedReadaloudDecoration = decoration
         requestedReadaloudDecorationVersion++
-        raLog("request id=${decoration?.id} version=$requestedReadaloudDecorationVersion jobActive=${readaloudDecorationJob?.isActive}")
 
         if (readaloudDecorationJob?.isActive == true) return
 
@@ -1844,31 +1839,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         }
                     } else {
                         nav.applyDecorations(listOfNotNull(pending), "overlay")
-                        val dom = nav.evaluateJavascript(
-                            """
-                            (function() {
-                                const els = Array.from(document.querySelectorAll('[data-group="overlay"] > div'));
-                                return JSON.stringify({
-                                    vh: window.innerHeight,
-                                    els: els.map((el) => {
-                                        const r = el.getBoundingClientRect();
-                                        const s = getComputedStyle(el);
-                                        return {
-                                            id: el.id,
-                                            top: Math.round(r.top),
-                                            left: Math.round(r.left),
-                                            width: Math.round(r.width),
-                                            height: Math.round(r.height),
-                                            bg: s.backgroundColor,
-                                            border: s.borderBottomColor,
-                                            opacity: s.opacity,
-                                        };
-                                    }),
-                                });
-                            })();
-                            """.trimIndent()
-                        )
-                        raLog("worker applied id=${pending?.id} version=$version dom=$dom")
                         appliedReadaloudDecorationVersion = version
                     }
                 }
