@@ -8,6 +8,7 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.InternalReadiumApi
 import org.readium.r2.shared.publication.Href
 import org.readium.r2.shared.publication.Link
+import org.readium.r2.shared.publication.html.cssSelector
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Manifest
 import org.readium.r2.shared.publication.Publication
@@ -149,10 +150,20 @@ object BookService {
         val link = publication.linkWithHref(href) ?: return defaultLocator
 
         val resource = publication.get(link) ?: return defaultLocator
-        val htmlContent = resource.readDecodeOrNull { Try.success(it.decodeString()) }?.getOrNull()
-            ?: return defaultLocator
-        val fragmentRegex = Regex("id=\"${fragment}\"")
+        val htmlContent = try {
+            resource.readDecodeOrNull { Try.success(it.decodeString()) }?.getOrNull()
+        } finally {
+            resource.close()
+        } ?: return defaultLocator
+        val fragmentRegex = Regex("""\bid\s*=\s*(["'])${Regex.escape(fragment)}\1""")
         val startOfFragment = fragmentRegex.find(htmlContent)?.range?.start ?: return defaultLocator
+        val clipText = ClipTextExtractor.extract(
+            htmlContent,
+            fragment,
+            clips[bookUuid].orEmpty()
+                .filter { Url.fromEpubHref(it.textResource) == href }
+                .map { it.fragmentId },
+        )
         val progression = startOfFragment.toDouble() / htmlContent.length.toDouble()
         val startOfChapterProgression =
             locateFromPositions(bookUuid, link).locations.totalProgression
@@ -177,8 +188,15 @@ object BookService {
             locations = Locator.Locations(
                 fragments = listOf(fragment),
                 progression = progression,
-                totalProgression = totalProgression
-            )
+                totalProgression = totalProgression,
+                // The HTML cssSelector extension reads this un-prefixed JSON
+                // field from otherLocations in Readium 3.1.2.
+                otherLocations = clipText?.cssSelector?.let { mapOf("cssSelector" to it) }
+                    ?: emptyMap(),
+            ),
+            text = clipText?.let {
+                Locator.Text(highlight = it.highlight, before = it.before, after = it.after)
+            } ?: Locator.Text()
         )
     }
 

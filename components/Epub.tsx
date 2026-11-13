@@ -244,25 +244,6 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const jumpHold = useAppSelector(getJumpHold)
   const isJumpHeld = jumpHold?.bookUuid === book.uuid
 
-  // A jump hold only waits for the target clip. If that clip never reports,
-  // clear it so the reader follows the audio and readaloud resumes. Include
-  // the hold's timestamp so an old timer cannot clear a newer hold.
-  useEffect(() => {
-    if (!isJumpHeld || !jumpHold) return
-
-    const timestamp = jumpHold.timestamp
-    const timer = setTimeout(() => {
-      dispatch(
-        bookshelfSlice.actions.jumpHoldExpired({
-          bookUuid: book.uuid,
-          timestamp,
-        }),
-      )
-    }, 3000)
-
-    return () => clearTimeout(timer)
-  }, [isJumpHeld, jumpHold, book.uuid, dispatch])
-
   const floatingToolbar = preferences?.floatingToolbar
   // Top padding of the reading area; the rail's return bar pins to it too.
   const pageTopPadding = floatingToolbar ? insets.top : 24

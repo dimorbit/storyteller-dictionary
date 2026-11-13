@@ -1,5 +1,7 @@
 import { isAnyOf } from "@reduxjs/toolkit"
 
+import { logger } from "@/logger"
+
 import {
   Storyteller,
   buildAudiobookLocator,
@@ -268,6 +270,66 @@ startAppListening({
   },
 })
 
+const JUMP_TARGET_RESOLUTION_BOUND_MS = 60_000
+const JUMP_TARGET_PLAYBACK_BOUND_MS = 30_000
+
+const jumpTimeoutKey = (bookUuid: UUID, timestamp: number) => `${bookUuid}:${timestamp}`
+const jumpTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+function clearJumpTimeout(bookUuid: UUID, timestamp: number) {
+  const key = jumpTimeoutKey(bookUuid, timestamp)
+  const timeout = jumpTimeouts.get(key)
+  if (timeout) clearTimeout(timeout)
+  jumpTimeouts.delete(key)
+}
+
+function scheduleJumpTimeout(
+  bookUuid: UUID,
+  timestamp: number,
+  delay: number,
+  expire: () => void,
+) {
+  clearJumpTimeout(bookUuid, timestamp)
+  const key = jumpTimeoutKey(bookUuid, timestamp)
+  const handle = setTimeout(() => {
+    if (jumpTimeouts.get(key) !== handle) return
+    jumpTimeouts.delete(key)
+    logger.info(`Saved-place jump ${bookUuid}:${timestamp} expired; resume following audio`)
+    expire()
+  }, delay)
+  jumpTimeouts.set(key, handle)
+}
+
+startAppListening({
+  actionCreator: bookmarkPressed,
+  effect: async ({ payload: { bookUuid, timestamp } }, listenerApi) => {
+    if (bookUuid !== getCurrentlyPlayingBookUuid(listenerApi.getState())) return
+    // Unresolved lookups get an outer bound. Resolving the target replaces it
+    // with a 30s clip bound: audio older than 3s cannot snap the reader back.
+    const expire = () => {
+      listenerApi.dispatch(bookshelfSlice.actions.jumpHoldExpired({ bookUuid, timestamp }))
+    }
+    scheduleJumpTimeout(bookUuid, timestamp, JUMP_TARGET_RESOLUTION_BOUND_MS, expire)
+    const cancelExpiry = () => clearJumpTimeout(bookUuid, timestamp)
+    listenerApi.signal.addEventListener("abort", cancelExpiry, { once: true })
+    try {
+      await listenerApi.condition((_, state) => {
+        const hold = getJumpHold(state)
+        if (hold?.bookUuid !== bookUuid || hold.timestamp !== timestamp) return true
+        if (hold.target) {
+          scheduleJumpTimeout(bookUuid, timestamp, JUMP_TARGET_PLAYBACK_BOUND_MS, expire)
+        }
+        return false
+      })
+    } catch (_) {
+      // A cancelled worker has its own timeout listener above.
+    } finally {
+      listenerApi.signal.removeEventListener("abort", cancelExpiry)
+      cancelExpiry()
+    }
+  },
+})
+
 startAppListening({
   actionCreator: playerClipChanged,
   effect: async (action, listenerApi) => {
@@ -278,19 +340,9 @@ startAppListening({
         listenerApi.getState(),
       )
       if (!currentBookUuid) return
-      // Clips reported before a jump settles would pull the reader back.
-      const hold = getJumpHold(listenerApi.getState())
-      if (hold) {
-        // A jump whose target clip never reports would otherwise keep the
-        // native reader paused forever, which stops the readaloud highlight.
-        if (Date.now() - hold.timestamp < 3000) return
-        listenerApi.dispatch(
-          bookshelfSlice.actions.jumpHoldExpired({
-            bookUuid: hold.bookUuid,
-            timestamp: hold.timestamp,
-          }),
-        )
-      }
+      // Clips reported before a jump settles would move the reader erroneously;
+      // an expired hold allows normal clip persistence to resume.
+      if (getJumpHold(listenerApi.getState())) return
 
       const locator = clip.locator
 

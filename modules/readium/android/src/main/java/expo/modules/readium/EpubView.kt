@@ -55,6 +55,7 @@ import org.readium.r2.shared.util.Url
 import org.json.JSONArray
 import org.json.JSONObject
 import org.readium.r2.shared.publication.Link
+import org.readium.r2.shared.publication.html.cssSelector
 import kotlin.math.abs
 import kotlin.math.ceil
 import java.io.File
@@ -218,7 +219,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             // selection and its system toolbar instead of leaving stale handles
             // and a menu behind. A foldable or split-screen resize keeps the
             // same configuration orientation and must not clear a live selection.
-            selectionActionModeCallback?.finish()
+            selectionActionModeCallback?.finishForRotation()
             clearSelection()
             onSelection(mapOf("cleared" to true))
             resetSelectionLayout()
@@ -1226,15 +1227,20 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val navigationLocator = if (
             fragment != null &&
             !locator.text.highlight.isNullOrBlank() &&
-            locator.locations.otherLocations[BookService.CLIP_ID_LOCATION_KEY] !is String &&
+            locator.locations.cssSelector != null &&
             bookUuid != null &&
             BookService.getFragments(bookUuid, locator).any { it.fragmentId == fragment }
         ) {
+            // Clip IDs are navigation markers, not element selectors. A block-scoped
+            // quote resolves the actual sentence instead of its empty clip anchor.
             locator.copy(
                 locations = locator.locations.copy(
                     fragments = locator.locations.fragments.drop(1),
-                    otherLocations = locator.locations.otherLocations +
-                        (BookService.CLIP_ID_LOCATION_KEY to fragment)
+                    otherLocations = if (locator.locations.otherLocations[BookService.CLIP_ID_LOCATION_KEY] is String) {
+                        locator.locations.otherLocations
+                    } else {
+                        locator.locations.otherLocations + (BookService.CLIP_ID_LOCATION_KEY to fragment)
+                    }
                 )
             )
         } else {
@@ -2204,41 +2210,55 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
 
                 storyteller.getFragmentPageProportion = function getFragmentPageProportion(fragmentId) {
-                    const element = document.getElementById(fragmentId);
-                    if (!element) return null;
+                    const anchor = document.getElementById(fragmentId);
+                    if (!anchor) return null;
 
-                    const rects = Array.from(element.getClientRects());
-                    if (rects.length === 0) return null;
-
-                    const viewportWidth = window.innerWidth;
-                    let visibleWidth = 0;
-                    let totalWidth = 0;
-                    let overflowsRight = false;
-                    let beforePage = true;
-
-                    for (const rect of rects) {
-                        totalWidth += rect.width;
-
-                        if (rect.right > viewportWidth) {
-                            overflowsRight = true;
-                        }
-                        if (rect.right > 0) {
-                            beforePage = false;
-                        }
-
-                        if (rect.left >= 0 && rect.right <= viewportWidth) {
-                            visibleWidth += rect.width;
-                        } else if (rect.left < viewportWidth && rect.right > 0) {
-                            const visibleLeft = Math.max(rect.left, 0);
-                            const visibleRight = Math.min(rect.right, viewportWidth);
-                            visibleWidth += visibleRight - visibleLeft;
-                        }
+                    const nextId = storyteller.fragmentIds.slice(storyteller.fragmentIds.indexOf(fragmentId) + 1)
+                        .find((id) => document.getElementById(id));
+                    const nextAnchor = nextId ? document.getElementById(nextId) : null;
+                    const range = document.createRange();
+                    if (anchor.textContent && anchor.textContent.trim()) {
+                        range.selectNodeContents(anchor);
+                    } else if (nextAnchor) {
+                        range.setStartAfter(anchor);
+                        range.setEndBefore(nextAnchor);
+                    } else {
+                        // The last anchor marks the beginning of its clip, not a
+                        // whole empty element. Use the rest of its text container.
+                        const container = anchor.closest('p, h1, h2, h3, h4, h5, h6, li, div');
+                        range.selectNodeContents(container || anchor.parentNode || anchor);
+                        try { range.setStartAfter(anchor); } catch (_) { return null; }
                     }
 
-                    if (totalWidth === 0) return null;
+                    const scroller = document.scrollingElement || document.documentElement;
+                    const leadingEdge = scroller.scrollLeft;
+                    const pageWidth = window.innerWidth;
 
-                    const proportion = visibleWidth / totalWidth;
-                    return { crossesPage: overflowsRight, beforePage, proportionOnCurrentPage: proportion };
+                    const rects = Array.from(range.getClientRects()).filter(
+                        (rect) => rect.width > 0 && rect.height > 0
+                    );
+                    if (rects.length === 0) return null;
+
+                    let visibleWidth = 0;
+                    let totalWidth = 0;
+                    let beforePage = true;
+                    let afterPage = true;
+                    for (const rect of rects) {
+                        const left = rect.left + scroller.scrollLeft;
+                        const right = rect.right + scroller.scrollLeft;
+                        const width = right - left;
+                        totalWidth += width;
+                        beforePage = beforePage && right <= leadingEdge;
+                        afterPage = afterPage && left >= leadingEdge + pageWidth;
+                        const overlap = Math.min(right, leadingEdge + pageWidth) - Math.max(left, leadingEdge);
+                        if (overlap > 0) visibleWidth += overlap;
+                    }
+
+                    return {
+                        crossesPage: !beforePage && !afterPage && visibleWidth < totalWidth,
+                        beforePage,
+                        proportionOnCurrentPage: visibleWidth / totalWidth
+                    };
                 };
 
                 document.body.firstElementChild.style.paddingLeft = "var(--st-padding-left)";
@@ -2269,6 +2289,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     @JavascriptInterface
     fun handleSelectionCleared() {
         if (System.currentTimeMillis() < ignoreSelectionClearedUntil) return
+        selectionActionModeCallback?.handleSelectionCleared()
         onSelection(mapOf("cleared" to true))
     }
 
@@ -2299,6 +2320,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             """.trimIndent()
             )
             if (props!!.isPlaying && props!!.locator?.href == locator.href) {
+                // A page turn changes the visible frame, but the decoration request
+                // is identical. Drop the dedupe marker so the mark is painted on the
+                // new page instead of staying on the old one.
+                requestedReadaloudDecoration = null
                 applyReadaloudDecoration(props!!.locator!!)
             }
             emitCurrentLocator()
