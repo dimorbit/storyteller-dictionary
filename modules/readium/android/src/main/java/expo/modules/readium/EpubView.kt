@@ -184,13 +184,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     override fun requestLayout() {
         super.requestLayout()
         val now = SystemClock.elapsedRealtime()
-        // While a selection is active and the audio is paused, skip the forced
-        // recursive layout: the WebView asks for layout on every selection update
-        // and force-laying out the whole reader makes the selection snap. During
-        // playback the layout must run, otherwise the readaloud decoration cannot
-        // move and the reader does not recover after a rotation.
-        val playing = props?.isPlaying == true
-        val skip = !playing && (isSelecting || now < selectionLayoutHoldUntil)
+        // While a selection is active, skip the forced recursive layout: the
+        // WebView asks for layout on every selection update and force-laying out
+        // the whole reader makes the selection snap. This applies during playback
+        // too; the readaloud decoration is painted inside the WebView and does not
+        // need the native layout pass.
+        val skip = isSelecting || now < selectionLayoutHoldUntil
         if (skip) return
         post {
             measureAndLayoutRecursively(this)
@@ -1113,9 +1112,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             val locator = when {
                 consistentLive == null -> selection.locator
                 consistentLive == locatorHighlight -> selection.locator
-                // before/after come from the first block; a cross-block selection must not carry them.
+                // Keep the locator's before/after context. Readium builds them from
+                // the text around the whole selection, and the saved-locator quote
+                // matcher uses them to pick the right copy of a repeated phrase.
                 else -> selection.locator.copy(
-                    text = selection.locator.text.copy(before = null, after = null, highlight = consistentLive)
+                    text = selection.locator.text.copy(highlight = consistentLive)
                 )
             }
             mapOf("text" to text, "locator" to locator.toJSON().toMap())
@@ -1778,7 +1779,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // stays the same within one chapter, so Readium moves the mark instead of
         // removing and adding it on every clip. It changes when the chapter href
         // changes, so Readium removes the old chapter's mark.
-        if (locator.locations.fragments.firstOrNull() == null) return
+        if (locator.locations.fragments.firstOrNull() == null) {
+            // A clip with no fragment cannot be located in this chapter. Remove the
+            // previous mark instead of leaving it frozen on an older sentence.
+            clearReadaloudDecoration()
+            return
+        }
 
         val style =
             if (props!!.readaloudDecoratorStyle == "underline") {
