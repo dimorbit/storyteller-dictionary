@@ -223,6 +223,11 @@ export const bookshelfSlice = createSlice({
         state.jumpHold.target = target
       }
     },
+    jumpHoldExpired(state, action: PayloadAction<{ bookUuid: UUID }>) {
+      if (state.jumpHold?.bookUuid === action.payload.bookUuid) {
+        state.jumpHold = null
+      }
+    },
     bookDeleted(state, action: PayloadAction<{ bookUuid: UUID }>) {
       const { bookUuid } = action.payload
 

@@ -279,7 +279,15 @@ startAppListening({
       )
       if (!currentBookUuid) return
       // Clips reported before a jump settles would pull the reader back.
-      if (getJumpHold(listenerApi.getState())) return
+      const hold = getJumpHold(listenerApi.getState())
+      if (hold) {
+        // A jump whose target clip never reports would otherwise keep the
+        // native reader paused forever, which stops the readaloud highlight.
+        if (Date.now() - hold.timestamp < 3000) return
+        listenerApi.dispatch(
+          bookshelfSlice.actions.jumpHoldExpired({ bookUuid: hold.bookUuid }),
+        )
+      }
 
       const locator = clip.locator
 

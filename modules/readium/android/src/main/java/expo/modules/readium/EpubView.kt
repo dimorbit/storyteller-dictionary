@@ -211,6 +211,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        val orientationChanged = (w > h) != (oldw > oldh)
+        if (orientationChanged && isSelecting) {
+            // Match the reader's rotation behaviour: a rotation dismisses the
+            // selection instead of leaving stale handles and a menu behind.
+            clearSelection()
+            onSelection(mapOf("cleared" to true))
+        }
         resetSelectionLayout()
         super.onSizeChanged(w, h, oldw, oldh)
     }
