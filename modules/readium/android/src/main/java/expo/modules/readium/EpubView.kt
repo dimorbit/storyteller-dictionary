@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import org.readium.r2.navigator.DecorableNavigator
 import org.readium.r2.navigator.Decoration
@@ -1076,31 +1077,33 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
      * created. The user can drag the handles after that, and the saved locator and text must
      * follow the handles. The live DOM text covers selections that span paragraphs or frames.
      */
-    suspend fun getCurrentSelection(): Map<String, Any>? {
-        val nav = navigator ?: return null
-        val selection = nav.currentSelection() ?: return null
-        val liveText = nav.evaluateJavascript(
-            "storyteller.getSelectionText ? storyteller.getSelectionText() : window.getSelection().toString()"
-        )?.let { result ->
-            runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
-        }?.takeIf { it.isNotBlank() }
-        // The two reads are separate calls, so the selection may have moved between them. Trust the
-        // live text only when it contains the locator's highlight, otherwise keep the locator's text.
-        val locatorHighlight = selection.locator.text.highlight.orEmpty()
-        val consistentLive = liveText?.takeIf {
-            locatorHighlight.isBlank() ||
-                normalizeSelectionText(it).contains(normalizeSelectionText(locatorHighlight))
+    suspend fun getCurrentSelection(): Map<String, Any>? = withTimeoutOrNull(1000L) {
+        withContext(Dispatchers.Main) {
+            val nav = navigator ?: return@withContext null
+            val selection = nav.currentSelection() ?: return@withContext null
+            val liveText = nav.evaluateJavascript(
+                "storyteller.getSelectionText ? storyteller.getSelectionText() : window.getSelection().toString()"
+            )?.let { result ->
+                runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
+            }?.takeIf { it.isNotBlank() }
+            // The two reads are separate calls, so the selection may have moved between them. Trust the
+            // live text only when it contains the locator's highlight, otherwise keep the locator's text.
+            val locatorHighlight = selection.locator.text.highlight.orEmpty()
+            val consistentLive = liveText?.takeIf {
+                locatorHighlight.isBlank() ||
+                    normalizeSelectionText(it).contains(normalizeSelectionText(locatorHighlight))
+            }
+            val text = consistentLive ?: locatorHighlight
+            val locator = when {
+                consistentLive == null -> selection.locator
+                consistentLive == locatorHighlight -> selection.locator
+                // before/after come from the first block; a cross-block selection must not carry them.
+                else -> selection.locator.copy(
+                    text = selection.locator.text.copy(before = null, after = null, highlight = consistentLive)
+                )
+            }
+            mapOf("text" to text, "locator" to locator.toJSON().toMap())
         }
-        val text = consistentLive ?: locatorHighlight
-        val locator = when {
-            consistentLive == null -> selection.locator
-            consistentLive == locatorHighlight -> selection.locator
-            // before/after come from the first block; a cross-block selection must not carry them.
-            else -> selection.locator.copy(
-                text = selection.locator.text.copy(before = null, after = null, highlight = consistentLive)
-            )
-        }
-        return mapOf("text" to text, "locator" to locator.toJSON().toMap())
     }
 
     private fun normalizeSelectionText(text: String): String = text.replace(Regex("\\s+"), " ").trim()

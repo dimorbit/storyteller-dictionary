@@ -101,7 +101,10 @@ export function SelectionMenu({
   // The menu's selection text and locator are from when the action mode was
   // created. Read the live selection so a dragged handle is respected.
   const currentSelection = async () => {
-    const current = await getCurrentSelection().catch(() => null)
+    const current = await Promise.race([
+      getCurrentSelection().catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+    ])
     return {
       text: (current?.text ?? selectedText ?? "").trim().replace(/\s+/g, " "),
       locator: current?.locator ?? locator,
