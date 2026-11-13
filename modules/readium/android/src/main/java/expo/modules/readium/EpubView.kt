@@ -1989,7 +1989,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
 
                 if (!globalThis.storyteller.selectionScrollPin) {
-                    globalThis.storyteller.selectionScrollPin = { left: null, raf: null };
+                    globalThis.storyteller.selectionScrollPin = { left: null, raf: null, startedAt: 0, idleFrames: 0 };
                     const selectionScrollPinHandler = () => {
                         const pin = globalThis.storyteller.selectionScrollPin;
                         if (pin.left === null) return;
@@ -2023,6 +2023,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     const pin = globalThis.storyteller.selectionScrollPin;
                     const scroller = document.scrollingElement || document.documentElement;
                     pin.left = scroller.scrollLeft;
+                    pin.startedAt = performance.now();
+                    pin.idleFrames = 0;
                     storyteller.startSelectionScrollPin();
                 };
 
@@ -2031,6 +2033,17 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     if (pin.raf !== null) return;
                     const tick = () => {
                         if (pin.left === null) {
+                            pin.raf = null;
+                            return;
+                        }
+                        const selection = document.getSelection();
+                        if (!selection || selection.isCollapsed) {
+                            pin.idleFrames++;
+                        } else {
+                            pin.idleFrames = 0;
+                        }
+                        if (performance.now() - pin.startedAt > 30000 || pin.idleFrames > 120) {
+                            pin.left = null;
                             pin.raf = null;
                             return;
                         }
