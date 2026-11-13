@@ -1084,17 +1084,26 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         )?.let { result ->
             runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
         }?.takeIf { it.isNotBlank() }
-        val text = liveText ?: selection.locator.text.highlight.orEmpty()
+        // The two reads are separate calls, so the selection may have moved between them. Trust the
+        // live text only when it contains the locator's highlight, otherwise keep the locator's text.
+        val locatorHighlight = selection.locator.text.highlight.orEmpty()
+        val consistentLive = liveText?.takeIf {
+            locatorHighlight.isBlank() ||
+                normalizeSelectionText(it).contains(normalizeSelectionText(locatorHighlight))
+        }
+        val text = consistentLive ?: locatorHighlight
         val locator = when {
-            liveText == null -> selection.locator
-            liveText == selection.locator.text.highlight -> selection.locator
+            consistentLive == null -> selection.locator
+            consistentLive == locatorHighlight -> selection.locator
             // before/after come from the first block; a cross-block selection must not carry them.
             else -> selection.locator.copy(
-                text = selection.locator.text.copy(before = null, after = null, highlight = liveText)
+                text = selection.locator.text.copy(before = null, after = null, highlight = consistentLive)
             )
         }
         return mapOf("text" to text, "locator" to locator.toJSON().toMap())
     }
+
+    private fun normalizeSelectionText(text: String): String = text.replace(Regex("\\s+"), " ").trim()
 
     /**
      * Collapse the webview's native text selection, which also hides the selection box
@@ -2007,6 +2016,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 }
 
                 storyteller.getSelectionText = function() {
+                    const own = window.getSelection ? window.getSelection().toString() : '';
+                    if (own.length > 0) return own;
                     let best = '';
                     const visit = (win) => {
                         try {
