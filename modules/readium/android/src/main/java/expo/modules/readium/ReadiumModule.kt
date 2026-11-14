@@ -181,7 +181,15 @@ class ReadiumModule : Module(), Listener {
                 { bookUuid: String, locatorMap: Map<String, Any> ->
                     val locatorJson = JSONObject(locatorMap)
                     val locator = Locator.fromJSON(locatorJson) ?: return@Coroutine null
-                    val clip = BookService.getClip(bookUuid, locator) ?: return@Coroutine null
+                    val exact = try {
+                        Result.success(BookService.getClip(bookUuid, locator))
+                    } catch (e: NoSuchElementException) {
+                        Result.failure(e)
+                    }
+                    val clip = exact.getOrNull()
+                        ?: BookService.getClipByProgression(bookUuid, locator)
+                        ?: exact.getOrThrow()
+                        ?: return@Coroutine null
 
                     return@Coroutine clip.toJson()
                 }

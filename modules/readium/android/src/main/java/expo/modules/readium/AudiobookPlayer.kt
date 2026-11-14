@@ -1478,6 +1478,7 @@ class AudiobookPlayer(
                     val clipTrackIndex = relativeUriToIndex[audioResourceKey(clip.audioResource)]
                     val currentTrackIndex = controller.currentMediaItemIndex
                     if (clipTrackIndex != null && clipTrackIndex < currentTrackIndex) {
+                        Log.d(READALOUD_LOG_TAG, "drop clip ${clip.fragmentId}: track $clipTrackIndex < $currentTrackIndex")
                         return@future result
                     }
                     if (clipTrackIndex == null || clipTrackIndex == currentTrackIndex) {
@@ -1488,6 +1489,10 @@ class AudiobookPlayer(
                         val speed = controller.playbackParameters.speed.coerceAtLeast(1f)
                         val tolerance = 0.25 * speed
                         if (position < clip.start - tolerance || position >= clip.end + tolerance) {
+                            Log.d(
+                                READALOUD_LOG_TAG,
+                                "drop clip ${clip.fragmentId}: idx=$clipTrackIndex cur=$currentTrackIndex pos=$position window=${clip.start}..${clip.end}"
+                            )
                             return@future result
                         }
                     }

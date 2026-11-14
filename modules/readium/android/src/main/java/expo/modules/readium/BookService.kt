@@ -125,6 +125,16 @@ object BookService {
         return clips.first { Url.fromEpubHref(it.textResource) == locator.href && it.fragmentId == fragment }
     }
 
+    // A page-position locator (the text slider, a contents link) has no sentence
+    // id, so getClip cannot resolve it. While audio plays the reader does not
+    // report its own locator, so without this the page moved and the audio stayed.
+    suspend fun getClipByProgression(bookUuid: String, locator: Locator): OverlayPar? {
+        val progression = locator.locations.progression ?: return null
+        val chapterClips = getFragments(bookUuid, locator)
+        if (chapterClips.isEmpty()) return null
+        return searchForClipByProgression(bookUuid, chapterClips, progression)
+    }
+
     fun getOverlayClips(bookUuid: String): List<OverlayPar> {
         return this.clips[bookUuid] ?: listOf()
     }
