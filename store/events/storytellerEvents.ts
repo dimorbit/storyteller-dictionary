@@ -32,6 +32,10 @@ export function addStorytellerEventListeners(store: AppStore) {
   })
 
   listenWhenActive("trackChanged", ({ track, position, index }) => {
+    // A held trailing position belongs to the previous track. Delivered after
+    // this event it would overwrite the new track's position, and while paused
+    // no later position event corrects it. trackChanged carries the position.
+    dispatchPosition.dropPending()
     store.dispatch(
       bookshelfSlice.actions.audioTrackChanged({ track, position, index }),
     )
@@ -68,6 +72,7 @@ export function addStorytellerEventListeners(store: AppStore) {
         Storyteller.getCurrentTrackIndex(),
       ]).then(([position, track, index]) => {
         if (!track) return
+        dispatchPosition.dropPending()
         store.dispatch(
           bookshelfSlice.actions.audioTrackChanged({ track, position, index }),
         )

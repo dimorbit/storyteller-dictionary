@@ -37,6 +37,12 @@ export function throttle<R, A extends unknown[]>(
     return val
   }
 
+  // Forget a trailing call that has not run yet, without cancelling the
+  // throttle. Use it when the held arguments became stale.
+  throttled.dropPending = () => {
+    lastArgs = undefined
+  }
+
   throttled.cancel = () => {
     cancelled = true
     lastArgs = undefined

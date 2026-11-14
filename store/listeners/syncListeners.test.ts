@@ -11,6 +11,10 @@ const nativeCall = (name: string) => {
   return new Promise<void>((resolve) => pending.push(resolve))
 }
 
+// Saved positions, in order. saveGate lets a test hold a save in flight.
+const saved: unknown[] = []
+let saveGate: () => Promise<void> = async () => {}
+
 vi.mock("@/modules/readium", () => ({
   Storyteller: {
     skip: (position: number) => nativeCall(`skip ${position}`),
@@ -31,7 +35,12 @@ vi.mock("@/store/localApi", () => ({
   localApi: {
     endpoints: {
       deleteBook: { matchFulfilled: () => false },
-      updatePosition: { initiate: () => () => ({ unwrap: async () => {} }) },
+      updatePosition: {
+        initiate: (arg: { locator: unknown }) => () => {
+          saved.push(arg.locator)
+          return { unwrap: () => saveGate() }
+        },
+      },
       getBook: { initiate: () => () => ({ unwrap: async () => null }) },
       getBookPositions: { initiate: () => () => ({ unwrap: async () => [] }) },
     },
@@ -128,4 +137,35 @@ test("a book-scope seek moves to the right track and offset", async () => {
   store.dispatch(actions.playerTotalPositionSeeked({ progress: 150 }))
   await finishAll()
   assert.deepEqual(calls, ["seekTo b.mp3 50"])
+})
+
+test("a clip save queued before a bookmark jump does not overwrite it", async () => {
+  calls.length = 0
+  saved.length = 0
+  const store = makeStore()
+  const clip = (name: string) =>
+    ({ relativeUrl: "a.mp3", start: 0, end: 1, locator: name }) as never
+
+  // The first clip save is in flight; the second waits behind it.
+  let releaseSave!: () => void
+  saveGate = () => new Promise<void>((resolve) => (releaseSave = resolve))
+  store.dispatch(actions.playerClipChanged({ clip: clip("clip 1") }))
+  await flush()
+  saveGate = async () => {}
+  store.dispatch(actions.playerClipChanged({ clip: clip("clip 2") }))
+
+  // The user taps a bookmark: the navigation saves its own place.
+  store.dispatch(
+    actions.bookmarkPressed({
+      bookUuid,
+      locator: "bookmark" as never,
+      timestamp: Date.now(),
+    }),
+  )
+  await flush()
+  releaseSave()
+  await flush()
+  await flush()
+
+  assert.deepEqual(saved, ["clip 1", "bookmark"])
 })

@@ -53,9 +53,14 @@ const matchReaderLocatorUpdate = isAnyOf(
   returnToPreviousPosition,
 )
 
+// Bumped by every reader navigation. A clip save queued before a navigation is
+// stale once it starts: saving it would overwrite the place just navigated to.
+let navigationGeneration = 0
+
 startAppListening({
   matcher: matchReaderLocatorUpdate,
   effect: async (action, listenerApi) => {
+    navigationGeneration++
     let bookUuid: UUID
     let locator: ReadiumLocator
     let timestamp: number
@@ -347,9 +352,17 @@ startAppListening({
       locator: clip.locator,
       timestamp: Date.now(),
     }
+    const generation = navigationGeneration
 
     await clipPersistence.enqueue(
       async () => {
+        // Revalidate when the save actually starts: a navigation or a held jump
+        // (bookmark) since this clip was queued makes it stale, and
+        // updatePosition replaces the saved place without checking timestamps.
+        const state = listenerApi.getState()
+        if (generation !== navigationGeneration) return
+        if (getJumpHold(state)) return
+        if (getCurrentlyPlayingBookUuid(state) !== currentBookUuid) return
         await listenerApi
           .dispatch(
             localApi.endpoints.updatePosition.initiate(payload, {
