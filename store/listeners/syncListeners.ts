@@ -34,8 +34,11 @@ import {
   getIsPlaying,
   getJumpHold,
   getReturnToPosition,
+  getTracks,
 } from "@/store/selectors/bookshelfSelectors"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
+import { createLatestWinsQueue } from "@/store/latestWinsQueue"
+import { trackPositionFromTotal } from "@/store/trackPosition"
 import { type UUID } from "@/uuid"
 
 import { startAppListening } from "./listenerMiddleware"
@@ -50,9 +53,14 @@ const matchReaderLocatorUpdate = isAnyOf(
   returnToPreviousPosition,
 )
 
+// Bumped by every reader navigation. A clip save queued before a navigation is
+// stale once it starts: saving it would overwrite the place just navigated to.
+let navigationGeneration = 0
+
 startAppListening({
   matcher: matchReaderLocatorUpdate,
   effect: async (action, listenerApi) => {
+    navigationGeneration++
     let bookUuid: UUID
     let locator: ReadiumLocator
     let timestamp: number
@@ -148,56 +156,45 @@ const matchPlayerPositionUpdate = isAnyOf(
   prevTrackPressed,
 )
 
+// Player commands run one at a time, in order. The listener used to unsubscribe
+// itself while a command was awaited, so RTK dropped every seek dispatched in
+// that window: a slider drag lost its later (and final) values. Now each action
+// is queued instead. An absolute seek replaces an older seek that has not
+// started yet, so a drag ends on its final value without replaying every step.
+const playerCommands = createLatestWinsQueue()
+
 startAppListening({
   matcher: matchPlayerPositionUpdate,
   effect: async (action, listenerApi) => {
-    listenerApi.unsubscribe()
-
-    try {
-      switch (action.type) {
-        // case playerTotalPositionSeeked.type: {
-        // const { progress } = action.payload
-
-        // let skipTo = progress
-        // let nextTrack = null
-
-        // const tracks = await TrackPlayer.getQueue()
-
-        // let acc = 0
-        // for (let i = 0; i < tracks.length; i++) {
-        //   const track = tracks[i]!
-        //   acc += track.duration ?? 0
-        //   if (acc > progress) break
-        //   nextTrack = i
-        //   skipTo -= track.duration ?? 0
-        // }
-        // if (nextTrack === null) return
-
-        // await TrackPlayer.skip(nextTrack, skipTo)
-        // break
-        // }
-        case playerPositionSeeked.type: {
-          const { progress } = action.payload
-
-          await Storyteller.skip(progress)
-          break
-        }
-        case playerTrackChanged.type: {
-          const { relativeUri, position } = action.payload
-          await Storyteller.seekTo(relativeUri, position ?? 0)
-          break
-        }
-        case nextTrackPressed.type: {
-          await Storyteller.next()
-          break
-        }
-        case prevTrackPressed.type: {
-          await Storyteller.prev()
-          break
-        }
-      }
-    } finally {
-      listenerApi.subscribe()
+    if (playerTotalPositionSeeked.match(action)) {
+      const target = trackPositionFromTotal(
+        getTracks(listenerApi.getState()),
+        action.payload.progress,
+      )
+      if (!target) return
+      await playerCommands.enqueue(
+        () => Storyteller.seekTo(target.track.relativeUri, target.position),
+        { replaceable: true },
+      )
+    } else if (playerPositionSeeked.match(action)) {
+      const { progress } = action.payload
+      await playerCommands.enqueue(() => Storyteller.skip(progress), {
+        replaceable: true,
+      })
+    } else if (playerTrackChanged.match(action)) {
+      const { relativeUri, position } = action.payload
+      await playerCommands.enqueue(
+        () => Storyteller.seekTo(relativeUri, position ?? 0),
+        { replaceable: true },
+      )
+    } else if (nextTrackPressed.match(action)) {
+      await playerCommands.enqueue(() => Storyteller.next(), {
+        replaceable: false,
+      })
+    } else if (prevTrackPressed.match(action)) {
+      await playerCommands.enqueue(() => Storyteller.prev(), {
+        replaceable: false,
+      })
     }
   },
 })
@@ -334,35 +331,47 @@ startAppListening({
   },
 })
 
+// Clip positions are saved one at a time. Like the seek listener above, this
+// used to unsubscribe while saving, which dropped any clip reported meanwhile
+// (for example the clip right after a seek), leaving the highlight behind. An
+// older clip that has not been saved yet is skipped for the newest one.
+const clipPersistence = createLatestWinsQueue()
+
 startAppListening({
   actionCreator: playerClipChanged,
   effect: async (action, listenerApi) => {
-    listenerApi.unsubscribe()
-    try {
-      const { clip } = action.payload
-      const currentBookUuid = getCurrentlyPlayingBookUuid(
-        listenerApi.getState(),
-      )
-      if (!currentBookUuid) return
-      // Clips reported before a jump settles would move the reader erroneously;
-      // an expired hold allows normal clip persistence to resume.
-      if (getJumpHold(listenerApi.getState())) return
+    const { clip } = action.payload
+    const currentBookUuid = getCurrentlyPlayingBookUuid(listenerApi.getState())
+    if (!currentBookUuid) return
+    // Clips reported before a jump settles would move the reader erroneously;
+    // an expired hold allows normal clip persistence to resume.
+    if (getJumpHold(listenerApi.getState())) return
 
-      const locator = clip.locator
-
-      const payload = {
-        bookUuid: currentBookUuid,
-        locator: locator,
-        timestamp: Date.now(),
-      }
-
-      await listenerApi
-        .dispatch(
-          localApi.endpoints.updatePosition.initiate(payload, { track: false }),
-        )
-        .unwrap()
-    } finally {
-      listenerApi.subscribe()
+    const payload = {
+      bookUuid: currentBookUuid,
+      locator: clip.locator,
+      timestamp: Date.now(),
     }
+    const generation = navigationGeneration
+
+    await clipPersistence.enqueue(
+      async () => {
+        // Revalidate when the save actually starts: a navigation or a held jump
+        // (bookmark) since this clip was queued makes it stale, and
+        // updatePosition replaces the saved place without checking timestamps.
+        const state = listenerApi.getState()
+        if (generation !== navigationGeneration) return
+        if (getJumpHold(state)) return
+        if (getCurrentlyPlayingBookUuid(state) !== currentBookUuid) return
+        await listenerApi
+          .dispatch(
+            localApi.endpoints.updatePosition.initiate(payload, {
+              track: false,
+            }),
+          )
+          .unwrap()
+      },
+      { replaceable: true },
+    )
   },
 })

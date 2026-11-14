@@ -297,6 +297,11 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
+    // Taps that end a selection must only end it. Readium reports the tap once the
+    // selection has collapsed, so without this it also turned a page or toggled the
+    // reader UI, and the user had to tap again (or the UI flipped under the menu).
+    @Volatile
+    private var selectionTapGuardUntil: Long = 0L
     private var lastOrientation: Int = resources.configuration.orientation
     var selectionActionModeCallback: SelectionActionModeCallback? = null
     private val webViews = LinkedHashSet<WebView>()
@@ -315,8 +320,17 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
     }
 
+    // True while a selection is live or was just dismissed by a tap.
+    private fun isSelectionTap(): Boolean =
+        isSelecting || SystemClock.elapsedRealtime() < selectionTapGuardUntil
+
+    private fun guardSelectionTaps() {
+        selectionTapGuardUntil = SystemClock.elapsedRealtime() + 500
+    }
+
     fun endSelection() {
         isSelecting = false
+        guardSelectionTaps()
         // The action mode can be recreated between handle moves. Hold the
         // recursive layout briefly so it cannot reset the selection in that gap.
         selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 200
@@ -927,6 +941,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         navigator?.addInputListener(object : InputListener {
             override fun onTap(event: TapEvent): Boolean {
+                if (isSelectionTap()) {
+                    // A live selection is ended by this tap; never turn the page.
+                    if (isSelecting) clearSelection()
+                    onSelection(mapOf("cleared" to true))
+                    return true
+                }
                 return layoutBehavior().onTap(
                     this@EpubView,
                     event,
@@ -2303,6 +2323,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     @JavascriptInterface
     fun handleSelectionCleared() {
         if (System.currentTimeMillis() < ignoreSelectionClearedUntil) return
+        // Only a selection the user had can make the next tap a dismissal. A plain
+        // tap also reports a collapsed selection and must still turn the page.
+        if (isSelecting) guardSelectionTaps()
         selectionActionModeCallback?.handleSelectionCleared()
         onSelection(mapOf("cleared" to true))
     }
