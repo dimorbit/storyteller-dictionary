@@ -395,9 +395,10 @@ class PlaybackService : MediaLibraryService() {
         val mediaIdToClipsMutable =
             mutableMapOf<String, MutableList<OverlayPar>>().withDefault { mutableListOf() }
         for (clip in clips) {
-            val trackClips = mediaIdToClipsMutable.getValue(clip.audioResource)
+            val key = audioResourceKey(clip.audioResource)
+            val trackClips = mediaIdToClipsMutable.getValue(key)
             trackClips.add(clip)
-            mediaIdToClipsMutable[clip.audioResource] = trackClips
+            mediaIdToClipsMutable[key] = trackClips
         }
         mediaIdToClips = mediaIdToClipsMutable
     }
@@ -412,7 +413,7 @@ class PlaybackService : MediaLibraryService() {
 
     @androidx.annotation.OptIn(UnstableApi::class)
     private fun scheduleMessages(mediaItem: MediaItem, index: Int) {
-        val trackClips = mediaIdToClips[mediaItem.mediaId] ?: return
+        val trackClips = mediaIdToClips[audioResourceKey(mediaItem.mediaId)] ?: return
 
         trackClips.forEach { clip ->
             player?.createMessage { messageType, payload ->
@@ -636,7 +637,7 @@ class PlaybackService : MediaLibraryService() {
         val manifest = runCatching { JSONObject(manifestJson) }.getOrNull()
         val readingOrder = manifest?.optJSONArray("readingOrder")
 
-        val trackIndex = tracks.indexOfFirst { it.mediaId == href }
+        val trackIndex = tracks.indexOfFirst { audioResourceKey(it.mediaId) == audioResourceKey(href) }
 
         if (trackIndex >= 0) {
             locations?.optJSONArray("fragments")?.let { fragments ->
@@ -664,7 +665,7 @@ class PlaybackService : MediaLibraryService() {
                 parseStoredClips(clipsJson)?.let { BookService.setClips(bookUuid, it) }
                 val clip = runCatching { BookService.getClip(bookUuid, locator) }.getOrNull()
                 if (clip != null) {
-                    val idx = tracks.indexOfFirst { it.mediaId == clip.audioResource }
+                    val idx = tracks.indexOfFirst { audioResourceKey(it.mediaId) == audioResourceKey(clip.audioResource) }
                     if (idx >= 0) return idx to (clip.start * 1000).roundToLong()
                 }
             }
@@ -829,7 +830,7 @@ class PlaybackService : MediaLibraryService() {
                         val sessionPlayer = session.player
                         val mediaItemIndex = sessionPlayer.currentMediaItemIndex
                         val mediaId = sessionPlayer.currentMediaItem?.mediaId ?: return result
-                        val clips = mediaIdToClips[mediaId] ?: return result
+                        val clips = mediaIdToClips[audioResourceKey(mediaId)] ?: return result
                         val clip = clips.find { it.fragmentId == fragmentId } ?: return result
 
                         val positionMs =
@@ -1013,9 +1014,10 @@ class AudiobookPlayer(
                 val relativeUriToClipsMutable =
                     mutableMapOf<String, MutableList<OverlayPar>>().withDefault { mutableListOf() }
                 for (clip in clips) {
-                    val trackClips = relativeUriToClipsMutable.getValue(clip.audioResource)
+                    val key = audioResourceKey(clip.audioResource)
+                    val trackClips = relativeUriToClipsMutable.getValue(key)
                     trackClips.add(clip)
-                    relativeUriToClipsMutable[clip.audioResource] = trackClips
+                    relativeUriToClipsMutable[key] = trackClips
                 }
                 relativeUriToClips = relativeUriToClipsMutable
 
@@ -1042,9 +1044,10 @@ class AudiobookPlayer(
                         }.build()
 
                     controller.addMediaItem(mediaItem)
-                    relativeUriToIndexMutable[track.relativeUri] = index
+                    relativeUriToIndexMutable[audioResourceKey(track.relativeUri)] = index
                 }
                 relativeUriToIndex = relativeUriToIndexMutable
+                logClipKeyMismatches(tracks.map { it.relativeUri }, clips)
 
                 controller.prepare()
             },
@@ -1098,9 +1101,10 @@ class AudiobookPlayer(
                     val relativeUriToClipsMutable =
                         mutableMapOf<String, MutableList<OverlayPar>>().withDefault { mutableListOf() }
                     for (clip in clips) {
-                        val trackClips = relativeUriToClipsMutable.getValue(clip.audioResource)
+                        val key = audioResourceKey(clip.audioResource)
+                        val trackClips = relativeUriToClipsMutable.getValue(key)
                         trackClips.add(clip)
-                        relativeUriToClipsMutable[clip.audioResource] = trackClips
+                        relativeUriToClipsMutable[key] = trackClips
                     }
                     relativeUriToClips = relativeUriToClipsMutable
                 }
@@ -1109,7 +1113,7 @@ class AudiobookPlayer(
                 // is already playing; never add or seek media items here.
                 val relativeUriToIndexMutable = mutableMapOf<String, Int>()
                 for (i in 0 until controller.mediaItemCount) {
-                    relativeUriToIndexMutable[controller.getMediaItemAt(i).mediaId] = i
+                    relativeUriToIndexMutable[audioResourceKey(controller.getMediaItemAt(i).mediaId)] = i
                 }
                 relativeUriToIndex = relativeUriToIndexMutable
             },
@@ -1139,7 +1143,7 @@ class AudiobookPlayer(
 
     fun getCurrentClip(): OverlayPar? {
         val track = getCurrentTrack() ?: return null
-        val trackClips = relativeUriToClips[track.relativeUri] ?: return null
+        val trackClips = relativeUriToClips[audioResourceKey(track.relativeUri)] ?: return null
         return searchForClip(trackClips, getPosition())
     }
 
@@ -1180,8 +1184,37 @@ class AudiobookPlayer(
         return tracks
     }
 
+    // Logs once per load when a track has no clips, so a device log shows whether
+    // clip keys and track ids name the same files. Without clips the highlight
+    // cannot follow the audio and seeks cannot move it.
+    private fun logClipKeyMismatches(trackIds: List<String>, clips: List<OverlayPar>) {
+        if (clips.isEmpty()) {
+            // Normal for a plain audiobook; for a readaloud it means no highlight.
+            Log.i(READALOUD_LOG_TAG, "no clips loaded for ${trackIds.size} tracks")
+            return
+        }
+        val clipKeys = clips.mapTo(LinkedHashSet()) { audioResourceKey(it.audioResource) }
+        val rawClipKeys = clips.mapTo(LinkedHashSet()) { it.audioResource }
+        val missing = trackIds.filter { audioResourceKey(it) !in clipKeys }
+        if (missing.isNotEmpty()) {
+            Log.w(
+                READALOUD_LOG_TAG,
+                "${missing.size}/${trackIds.size} tracks have no clips; " +
+                    "first track=${missing.first()} clip keys=${clipKeys.take(3)}"
+            )
+        }
+        val respelled = trackIds.filter { it !in rawClipKeys && audioResourceKey(it) in clipKeys }
+        if (respelled.isNotEmpty()) {
+            Log.i(
+                READALOUD_LOG_TAG,
+                "${respelled.size} track ids match clips only after normalizing; " +
+                    "track=${respelled.first()} clip=${rawClipKeys.first { audioResourceKey(it) == audioResourceKey(respelled.first()) }}"
+            )
+        }
+    }
+
     private fun emitClipChange(relativeUri: String, positionSeconds: Double) {
-        val trackClips = relativeUriToClips[relativeUri] ?: return
+        val trackClips = relativeUriToClips[audioResourceKey(relativeUri)] ?: return
         val bookUuid = bookUuid ?: return
         val currentClip = searchForClip(trackClips, positionSeconds)
         if (currentClip != null) {
@@ -1310,10 +1343,13 @@ class AudiobookPlayer(
     fun seekTo(relativeUri: String, position: Double, skipEmit: Boolean?) {
         val player = controller ?: return
         val currentTrack = getCurrentTrack()
-        val index = relativeUriToIndex[relativeUri] ?: return
+        val index = relativeUriToIndex[audioResourceKey(relativeUri)] ?: run {
+            Log.w(READALOUD_LOG_TAG, "seekTo: no track for $relativeUri")
+            return
+        }
         player.seekTo(index, (position * 1000).roundToLong())
 
-        if (currentTrack?.relativeUri.toString() == relativeUri) {
+        if (currentTrack != null && audioResourceKey(currentTrack.relativeUri) == audioResourceKey(relativeUri)) {
             onPositionChanged(position)
         }
 
@@ -1325,6 +1361,10 @@ class AudiobookPlayer(
     fun skip(position: Double) {
         val player = controller ?: return
         player.seekTo((position * 1000).roundToLong())
+
+        // Position events only come from the progress collector while playing.
+        // Report the new place now, or a paused seek bar snaps back to the old one.
+        onPositionChanged(position)
 
         val currentTrack = getCurrentTrack() ?: return
 
@@ -1435,14 +1475,19 @@ class AudiobookPlayer(
                     // back to the old sentence, so ignore it. The track index tells a
                     // stale message from the first clip of a track the controller has
                     // not reported yet; the small lead allows for an early position.
-                    val clipTrackIndex = relativeUriToIndex[clip.audioResource]
+                    val clipTrackIndex = relativeUriToIndex[audioResourceKey(clip.audioResource)]
                     val currentTrackIndex = controller.currentMediaItemIndex
                     if (clipTrackIndex != null && clipTrackIndex < currentTrackIndex) {
                         return@future result
                     }
                     if (clipTrackIndex == null || clipTrackIndex == currentTrackIndex) {
                         val position = controller.currentPosition / 1000.0
-                        if (position < clip.start - 0.25 || position >= clip.end + 0.25) {
+                        // The tolerance is in media time, but dispatch delay is in wall time.
+                        // At 2x-3x speed, 0.25 s of media time is only 80-125 ms of wall time,
+                        // so scale it by the playback speed to keep valid clips from being dropped.
+                        val speed = controller.playbackParameters.speed.coerceAtLeast(1f)
+                        val tolerance = 0.25 * speed
+                        if (position < clip.start - tolerance || position >= clip.end + tolerance) {
                             return@future result
                         }
                     }

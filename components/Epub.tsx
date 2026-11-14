@@ -5,6 +5,7 @@ import { useVerticalBarEdgeIOS } from "expo-status-bar"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   DeviceEventEmitter,
+  Pressable,
   StatusBar,
   TouchableOpacity,
   View,
@@ -235,19 +236,35 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     })
   }, [])
 
+  // Closes the selection menu and the native selection together.
+  const closeSelection = useCallback(() => {
+    setSelection(null)
+    setActiveHighlight(null)
+    setActiveDictionaryEntryUuid(null)
+    setWashDecorationId(null)
+    clearNativeSelection()
+  }, [clearNativeSelection])
+
   const isPlaying = useAppSelector(getIsPlaying)
   const returnPosition = useAppSelector((state) =>
     getReturnToPosition(state, book.uuid),
   )
   // While a jump waits for the audio, the native view behaves as paused, so it
   // does not schedule page turns toward where the audio still is.
-  const isJumpHeld = useAppSelector(getJumpHold)?.bookUuid === book.uuid
+  const jumpHold = useAppSelector(getJumpHold)
+  const isJumpHeld = jumpHold?.bookUuid === book.uuid
 
   const floatingToolbar = preferences?.floatingToolbar
   // Top padding of the reading area; the rail's return bar pins to it too.
   const pageTopPadding = floatingToolbar ? insets.top : 24
   const readerTop = pageTopPadding + (rail || floatingToolbar ? 0 : toolbarHeight)
   const returnBarTop = rail ? pageTopPadding : toolbarHeight
+  // Everything above the page's WebView: the reader's top padding, plus the
+  // toolbar when it sits above the page or floats over it while shown.
+  const selectionDismissTop = Math.max(
+    readerTop,
+    !rail && floatingToolbar && preferences?.showReaderUi ? toolbarHeight : 0,
+  )
   const returnBarBottom = Math.max(
     0,
     returnBarTop + navigationReturnHeight - readerTop,
@@ -361,6 +378,20 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
         pointerEvents="box-none"
         className="absolute top-0 right-0 bottom-0 left-0 z-10"
       >
+        {/* The menu has no full-screen backdrop, so selection handles stay
+            draggable. The strip above the page is not part of the WebView,
+            though: the top toolbar (or, with it hidden, empty padding) took a
+            tap there and the selection never closed. While a selection is
+            open, a tap anywhere above the page closes it instead. */}
+        {ENABLE_SELECTION_UI && selection && selectionDismissTop > 0 && (
+          <Pressable
+            accessibilityLabel="Close selection menu"
+            accessibilityRole="button"
+            className="absolute top-0 right-0 left-0"
+            style={{ height: selectionDismissTop }}
+            onPress={closeSelection}
+          />
+        )}
         {ENABLE_SELECTION_UI && selection && (
           <SelectionMenu
             bookUuid={book.uuid}
@@ -380,13 +411,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             existingHighlight={activeHighlight}
             dictionaryEntry={activeDictionaryEntry}
             onDictionaryEntryDeleted={handleDictionaryEntryDeleted}
-            onClose={() => {
-              setSelection(null)
-              setActiveHighlight(null)
-              setActiveDictionaryEntryUuid(null)
-              setWashDecorationId(null)
-              clearNativeSelection()
-            }}
+            onClose={closeSelection}
           />
         )}
       </View>
@@ -475,6 +500,12 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             )
           }}
           onMiddleTouch={() => {
+            // A tap that ends a selection only ends it; it must not also show
+            // or hide the reader UI under the menu.
+            if (selection) {
+              closeSelection()
+              return
+            }
             updateGlobalPreference({
               name: "showReaderUi",
               value: !preferences?.showReaderUi,

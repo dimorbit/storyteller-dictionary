@@ -29,7 +29,22 @@ import org.readium.r2.shared.publication.Publication
 import kotlin.math.ceil
 
 class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionModeCallback() {
+    private var currentActionMode: ActionMode? = null
+    // An old selection must not close a newer one after rotation.
+    private var generation = 0L
+    private var pendingRotationClear: Long? = null
+    private var rotationClear: Runnable? = null
+
+    init {
+        epubView.selectionActionModeCallback = this
+    }
+
     override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+        currentActionMode = mode
+        val currentGeneration = ++generation
+        pendingRotationClear = null
+        rotationClear?.let { epubView.removeCallbacks(it) }
+        rotationClear = null
         epubView.beginSelection()
         val activity: FragmentActivity? = epubView.appContext.currentActivity as FragmentActivity?
         activity?.lifecycleScope?.launch {
@@ -41,12 +56,14 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
                 ?.let { result ->
                     runCatching { JSONTokener(result).nextValue() as? String }.getOrNull()
                 }
+            if (currentGeneration != generation || pendingRotationClear != null) return@launch
             val selectedText = liveText?.takeIf { it.isNotBlank() }
                 ?: selection.locator.text.highlight.orEmpty()
             selection.rect?.let {
                 val x = ceil(it.centerX() / epubView.resources.displayMetrics.density).toInt()
                 val y = ceil(it.top / epubView.resources.displayMetrics.density).toInt() - 16
                 val yBottom = ceil(it.bottom / epubView.resources.displayMetrics.density).toInt()
+                if (currentGeneration != generation) return@let
                 epubView.onSelection(
                     mapOf(
                         "locator" to selection.locator.toJSON().toMap(),
@@ -69,8 +86,35 @@ class SelectionActionModeCallback(private val epubView: EpubView) : BaseActionMo
     }
 
     override fun onDestroyActionMode(mode: ActionMode) {
+        if (currentActionMode === mode) currentActionMode = null
         epubView.endSelection()
         super.onDestroyActionMode(mode)
+    }
+
+    fun handleSelectionCleared() {
+        // Once selection has actually moved, an old rotation has no stale UI to clear.
+        pendingRotationClear = null
+        rotationClear?.let { epubView.removeCallbacks(it) }
+        rotationClear = null
+    }
+
+    fun finishForRotation() {
+        val oldMode = currentActionMode ?: return
+        val dismissed = ++generation
+        pendingRotationClear = dismissed
+        oldMode.finish()
+        // ActionMode can stay referenced after finish, so use the dismissal's
+        // own generation instead of an API-unavailable isActive query.
+        // Only the current old mode may send this late dismissal.
+        val clear = Runnable {
+            if (pendingRotationClear == dismissed) {
+                epubView.onSelection(mapOf("cleared" to true))
+            }
+            if (rotationClear != null) pendingRotationClear = null
+            rotationClear = null
+        }
+        rotationClear = clear
+        epubView.postDelayed(clear, 250)
     }
 }
 

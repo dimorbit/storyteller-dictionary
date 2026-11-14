@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import org.readium.r2.navigator.DecorableNavigator
 import org.readium.r2.navigator.Decoration
@@ -54,6 +55,7 @@ import org.readium.r2.shared.util.Url
 import org.json.JSONArray
 import org.json.JSONObject
 import org.readium.r2.shared.publication.Link
+import org.readium.r2.shared.publication.html.cssSelector
 import kotlin.math.abs
 import kotlin.math.ceil
 import java.io.File
@@ -183,16 +185,46 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     override fun requestLayout() {
         super.requestLayout()
         val now = SystemClock.elapsedRealtime()
+        // While a selection is active, skip the forced recursive layout: the
+        // WebView asks for layout on every selection update and force-laying out
+        // the whole reader makes the selection snap. This applies during playback
+        // too; the readaloud decoration is painted inside the WebView and does not
+        // need the native layout pass.
         val skip = isSelecting || now < selectionLayoutHoldUntil
-        // While a selection handle is moving, the WebView asks for layout on
-        // every selection update. Force-laying out the whole reader here makes
-        // the selection range snap to the paragraph and start over, many times
-        // a second. The WebView can keep its own layout until the action mode
-        // ends.
         if (skip) return
         post {
             measureAndLayoutRecursively(this)
         }
+    }
+
+    // endSelection() is the only other place that clears the selection flags, and it
+    // depends on the action mode callback. If that callback is missed, requestLayout
+    // would skip the recursive layout forever, so clear the flags on these lifecycle events too.
+    private fun resetSelectionLayout() {
+        isSelecting = false
+        selectionLayoutHoldUntil = 0L
+    }
+
+    override fun onDetachedFromWindow() {
+        resetSelectionLayout()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        val orientation = resources.configuration.orientation
+        val rotated = orientation != lastOrientation
+        lastOrientation = orientation
+        if (rotated) {
+            // Match the reader's rotation behaviour: a rotation dismisses the
+            // selection and its system toolbar instead of leaving stale handles
+            // and a menu behind. A foldable or split-screen resize keeps the
+            // same configuration orientation and must not clear a live selection.
+            selectionActionModeCallback?.finishForRotation()
+            clearSelection()
+            onSelection(mapOf("cleared" to true))
+            resetSelectionLayout()
+        }
+        super.onSizeChanged(w, h, oldw, oldh)
     }
 
     private fun cancelJumpForReaderInput() {
@@ -265,6 +297,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     private var isSelecting: Boolean = false
     private var selectionLayoutHoldUntil: Long = 0L
+    // Taps that end a selection must only end it. Readium reports the tap once the
+    // selection has collapsed, so without this it also turned a page or toggled the
+    // reader UI, and the user had to tap again (or the UI flipped under the menu).
+    @Volatile
+    private var selectionTapGuardUntil: Long = 0L
+    private var lastOrientation: Int = resources.configuration.orientation
+    var selectionActionModeCallback: SelectionActionModeCallback? = null
     private val webViews = LinkedHashSet<WebView>()
     private val webViewScrollPositions = mutableMapOf<WebView, Pair<Int, Int>>()
 
@@ -281,8 +320,17 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
     }
 
+    // True while a selection is live or was just dismissed by a tap.
+    private fun isSelectionTap(): Boolean =
+        isSelecting || SystemClock.elapsedRealtime() < selectionTapGuardUntil
+
+    private fun guardSelectionTaps() {
+        selectionTapGuardUntil = SystemClock.elapsedRealtime() + 500
+    }
+
     fun endSelection() {
         isSelecting = false
+        guardSelectionTaps()
         // The action mode can be recreated between handle moves. Hold the
         // recursive layout briefly so it cannot reset the selection in that gap.
         selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 200
@@ -893,6 +941,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         navigator?.addInputListener(object : InputListener {
             override fun onTap(event: TapEvent): Boolean {
+                if (isSelectionTap()) {
+                    // A live selection is ended by this tap; never turn the page.
+                    if (isSelecting) clearSelection()
+                    onSelection(mapOf("cleared" to true))
+                    return true
+                }
                 return layoutBehavior().onTap(
                     this@EpubView,
                     event,
@@ -924,6 +978,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     }
 
     fun destroyNavigator() {
+        resetSelectionLayout()
+        selectionActionModeCallback = null
         pendingJumpLocator = null
         cancelJumpPosition()
         submittedPreferences = null
@@ -1057,24 +1113,38 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
      * created. The user can drag the handles after that, and the saved locator and text must
      * follow the handles. The live DOM text covers selections that span paragraphs or frames.
      */
-    suspend fun getCurrentSelection(): Map<String, Any>? {
-        val nav = navigator ?: return null
-        val selection = nav.currentSelection() ?: return null
-        val liveText = nav.evaluateJavascript(
-            "storyteller.getSelectionText ? storyteller.getSelectionText() : window.getSelection().toString()"
-        )?.let { result ->
-            runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
-        }?.takeIf { it.isNotBlank() }
-        val text = liveText ?: selection.locator.text.highlight.orEmpty()
-        val locator = if (liveText != null) {
-            selection.locator.copy(
-                text = selection.locator.text.copy(highlight = liveText)
-            )
-        } else {
-            selection.locator
+    suspend fun getCurrentSelection(): Map<String, Any>? = withTimeoutOrNull(1000L) {
+        withContext(Dispatchers.Main) {
+            val nav = navigator ?: return@withContext null
+            val selection = nav.currentSelection() ?: return@withContext null
+            val liveText = nav.evaluateJavascript(
+                "storyteller.getSelectionText ? storyteller.getSelectionText() : window.getSelection().toString()"
+            )?.let { result ->
+                runCatching { Json.decodeFromString<String?>(result) }.getOrNull()
+            }?.takeIf { it.isNotBlank() }
+            // The two reads are separate calls, so the selection may have moved between them. Trust the
+            // live text only when it contains the locator's highlight, otherwise keep the locator's text.
+            val locatorHighlight = selection.locator.text.highlight.orEmpty()
+            val consistentLive = liveText?.takeIf {
+                locatorHighlight.isBlank() ||
+                    normalizeSelectionText(it).contains(normalizeSelectionText(locatorHighlight))
+            }
+            val text = consistentLive ?: locatorHighlight
+            val locator = when {
+                consistentLive == null -> selection.locator
+                consistentLive == locatorHighlight -> selection.locator
+                // Keep the locator's before/after context. Readium builds them from
+                // the text around the whole selection, and the saved-locator quote
+                // matcher uses them to pick the right copy of a repeated phrase.
+                else -> selection.locator.copy(
+                    text = selection.locator.text.copy(highlight = consistentLive)
+                )
+            }
+            mapOf("text" to text, "locator" to locator.toJSON().toMap())
         }
-        return mapOf("text" to text, "locator" to locator.toJSON().toMap())
     }
+
+    private fun normalizeSelectionText(text: String): String = text.replace(Regex("\\s+"), " ").trim()
 
     /**
      * Collapse the webview's native text selection, which also hides the selection box
@@ -1177,15 +1247,20 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val navigationLocator = if (
             fragment != null &&
             !locator.text.highlight.isNullOrBlank() &&
-            locator.locations.otherLocations[BookService.CLIP_ID_LOCATION_KEY] !is String &&
+            locator.locations.cssSelector != null &&
             bookUuid != null &&
             BookService.getFragments(bookUuid, locator).any { it.fragmentId == fragment }
         ) {
+            // Clip IDs are navigation markers, not element selectors. A block-scoped
+            // quote resolves the actual sentence instead of its empty clip anchor.
             locator.copy(
                 locations = locator.locations.copy(
                     fragments = locator.locations.fragments.drop(1),
-                    otherLocations = locator.locations.otherLocations +
-                        (BookService.CLIP_ID_LOCATION_KEY to fragment)
+                    otherLocations = if (locator.locations.otherLocations[BookService.CLIP_ID_LOCATION_KEY] is String) {
+                        locator.locations.otherLocations
+                    } else {
+                        locator.locations.otherLocations + (BookService.CLIP_ID_LOCATION_KEY to fragment)
+                    }
                 )
             )
         } else {
@@ -1348,6 +1423,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             val json = JSONObject(result)
             mapOf(
                 "crossesPage" to json.getBoolean("crossesPage"),
+                "beforePage" to json.optBoolean("beforePage", false),
                 "proportionOnCurrentPage" to json.getDouble("proportionOnCurrentPage")
             )
         } catch (e: Exception) {
@@ -1375,6 +1451,17 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         activity.lifecycleScope.launch {
             val result = getFragmentPageProportion(fragmentId) ?: return@launch
+            val currentProps = props ?: return@launch
+            if (!currentProps.isPlaying || !layoutBehavior().supportsPagedClipScheduling ||
+                currentProps.locator?.locations?.fragments?.firstOrNull() != fragmentId
+            ) return@launch
+            val beforePage = result["beforePage"] as? Boolean ?: return@launch
+            if (beforePage) {
+                // The JavaScript measurement was asynchronous. Do not follow a
+                // clip that stopped or changed before this result arrived.
+                currentProps.locator?.let { go(it) }
+                return@launch
+            }
             val crossesPage = result["crossesPage"] as? Boolean ?: return@launch
             if (!crossesPage) return@launch
 
@@ -1382,10 +1469,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
             player.scheduleClipEvent(fragmentId, proportion) {
                 activity.lifecycleScope.launch {
-                    if (!layoutBehavior().supportsPagedClipScheduling) return@launch
+                    if (props?.isPlaying != true ||
+                        props?.locator?.locations?.fragments?.firstOrNull() != fragmentId ||
+                        !layoutBehavior().supportsPagedClipScheduling
+                    ) return@launch
 
-                    val recheck = getFragmentPageProportion(fragmentId)
-                    val overflowsRight = (recheck?.get("crossesPage") as? Boolean) ?: false
+                    val recheck = getFragmentPageProportion(fragmentId) ?: return@launch
+                    val liveProps = props ?: return@launch
+                    if (!liveProps.isPlaying ||
+                        liveProps.locator?.locations?.fragments?.firstOrNull() != fragmentId ||
+                        !layoutBehavior().supportsPagedClipScheduling
+                    ) return@launch
+                    val overflowsRight = recheck["crossesPage"] as? Boolean ?: false
 
                     if (overflowsRight) {
                         // not animated
@@ -1722,7 +1817,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // stays the same within one chapter, so Readium moves the mark instead of
         // removing and adding it on every clip. It changes when the chapter href
         // changes, so Readium removes the old chapter's mark.
-        if (locator.locations.fragments.firstOrNull() == null) return
+        if (locator.locations.fragments.firstOrNull() == null) {
+            // A clip with no fragment cannot be located in this chapter. Remove the
+            // previous mark instead of leaving it frozen on an older sentence.
+            clearReadaloudDecoration()
+            return
+        }
 
         val style =
             if (props!!.readaloudDecoratorStyle == "underline") {
@@ -1736,6 +1836,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     fun clearReadaloudDecoration() {
         requestReadaloudDecoration(null)
     }
+
 
     // Readium diffs a decoration group against the list it last received. Two
     // applications started close together read each other's lists, and their
@@ -1970,7 +2071,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
 
                 if (!globalThis.storyteller.selectionScrollPin) {
-                    globalThis.storyteller.selectionScrollPin = { left: null, raf: null };
+                    globalThis.storyteller.selectionScrollPin = { left: null, raf: null, startedAt: 0, idleFrames: 0 };
                     const selectionScrollPinHandler = () => {
                         const pin = globalThis.storyteller.selectionScrollPin;
                         if (pin.left === null) return;
@@ -1987,6 +2088,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 }
 
                 storyteller.getSelectionText = function() {
+                    const own = window.getSelection ? window.getSelection().toString() : '';
+                    if (own.length > 0) return own;
                     let best = '';
                     const visit = (win) => {
                         try {
@@ -2004,6 +2107,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     const pin = globalThis.storyteller.selectionScrollPin;
                     const scroller = document.scrollingElement || document.documentElement;
                     pin.left = scroller.scrollLeft;
+                    pin.startedAt = performance.now();
+                    pin.idleFrames = 0;
                     storyteller.startSelectionScrollPin();
                 };
 
@@ -2012,6 +2117,17 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     if (pin.raf !== null) return;
                     const tick = () => {
                         if (pin.left === null) {
+                            pin.raf = null;
+                            return;
+                        }
+                        const selection = document.getSelection();
+                        if (!selection || selection.isCollapsed) {
+                            pin.idleFrames++;
+                        } else {
+                            pin.idleFrames = 0;
+                        }
+                        if (performance.now() - pin.startedAt > 30000 || pin.idleFrames > 120) {
+                            pin.left = null;
                             pin.raf = null;
                             return;
                         }
@@ -2126,37 +2242,57 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
 
                 storyteller.getFragmentPageProportion = function getFragmentPageProportion(fragmentId) {
-                    const element = document.getElementById(fragmentId);
-                    if (!element) return null;
+                    const anchor = document.getElementById(fragmentId);
+                    if (!anchor) return null;
 
-                    const rects = Array.from(element.getClientRects());
-                    if (rects.length === 0) return null;
-
-                    const viewportWidth = window.innerWidth;
-                    let visibleWidth = 0;
-                    let totalWidth = 0;
-                    let overflowsRight = false;
-
-                    for (const rect of rects) {
-                        totalWidth += rect.width;
-
-                        if (rect.right > viewportWidth) {
-                            overflowsRight = true;
-                        }
-
-                        if (rect.left >= 0 && rect.right <= viewportWidth) {
-                            visibleWidth += rect.width;
-                        } else if (rect.left < viewportWidth && rect.right > 0) {
-                            const visibleLeft = Math.max(rect.left, 0);
-                            const visibleRight = Math.min(rect.right, viewportWidth);
-                            visibleWidth += visibleRight - visibleLeft;
-                        }
+                    const nextId = storyteller.fragmentIds.slice(storyteller.fragmentIds.indexOf(fragmentId) + 1)
+                        .find((id) => document.getElementById(id));
+                    const nextAnchor = nextId ? document.getElementById(nextId) : null;
+                    const range = document.createRange();
+                    if (anchor.textContent && anchor.textContent.trim()) {
+                        range.selectNodeContents(anchor);
+                    } else if (nextAnchor) {
+                        range.setStartAfter(anchor);
+                        range.setEndBefore(nextAnchor);
+                    } else {
+                        // The last anchor marks the beginning of its clip, not a
+                        // whole empty element. Use the rest of its text container.
+                        const container = anchor.closest('p, h1, h2, h3, h4, h5, h6, li, div');
+                        range.selectNodeContents(container || anchor.parentNode || anchor);
+                        try { range.setStartAfter(anchor); } catch (_) { return null; }
                     }
 
-                    if (totalWidth === 0) return null;
+                    const scroller = document.scrollingElement || document.documentElement;
+                    const leadingEdge = scroller.scrollLeft;
+                    const pageWidth = window.innerWidth;
 
-                    const proportion = visibleWidth / totalWidth;
-                    return { crossesPage: overflowsRight, proportionOnCurrentPage: proportion };
+                    const rects = Array.from(range.getClientRects()).filter(
+                        (rect) => rect.width > 0 && rect.height > 0
+                    );
+                    if (rects.length === 0) return null;
+
+                    let visibleWidth = 0;
+                    let totalWidth = 0;
+                    let beforePage = true;
+                    let afterPage = true;
+                    let crossesPage = false;
+                    for (const rect of rects) {
+                        const left = rect.left + scroller.scrollLeft;
+                        const right = rect.right + scroller.scrollLeft;
+                        const width = right - left;
+                        totalWidth += width;
+                        beforePage = beforePage && right <= leadingEdge;
+                        afterPage = afterPage && left >= leadingEdge + pageWidth;
+                        if (right > leadingEdge + pageWidth) crossesPage = true;
+                        const overlap = Math.min(right, leadingEdge + pageWidth) - Math.max(left, leadingEdge);
+                        if (overlap > 0) visibleWidth += overlap;
+                    }
+
+                    return {
+                        crossesPage,
+                        beforePage,
+                        proportionOnCurrentPage: visibleWidth / totalWidth
+                    };
                 };
 
                 document.body.firstElementChild.style.paddingLeft = "var(--st-padding-left)";
@@ -2187,6 +2323,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     @JavascriptInterface
     fun handleSelectionCleared() {
         if (System.currentTimeMillis() < ignoreSelectionClearedUntil) return
+        // Only a selection the user had can make the next tap a dismissal. A plain
+        // tap also reports a collapsed selection and must still turn the page.
+        if (isSelecting) guardSelectionTaps()
+        selectionActionModeCallback?.handleSelectionCleared()
         onSelection(mapOf("cleared" to true))
     }
 
@@ -2198,6 +2338,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         if (locator.href != lastDictionarySearchHref) {
             lastDictionarySearchHref = locator.href
             searchDictionaryEntries(locator.href)
+        }
+
+        if (props!!.isPlaying && props!!.locator?.href == locator.href) {
+            // A same-chapter page turn does not change href. Repaint only from
+            // the navigator's locator callback, not every prop reconciliation.
+            requestedReadaloudDecoration = null
+            applyReadaloudDecoration(props!!.locator!!)
         }
 
         if (locator.href != props!!.locator?.href || changingResource) {
@@ -2216,9 +2363,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
             """.trimIndent()
             )
-            if (props!!.isPlaying && props!!.locator?.href == locator.href) {
-                applyReadaloudDecoration(props!!.locator!!)
-            }
             emitCurrentLocator()
         } else {
             emitCurrentLocator()
