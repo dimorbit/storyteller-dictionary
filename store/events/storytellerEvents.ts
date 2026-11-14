@@ -4,6 +4,7 @@ import { Storyteller } from "@/modules/readium"
 import { playerClipChanged } from "@/store/actions"
 import { type AppStore } from "@/store/appState"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
+import { throttle } from "@/throttle"
 
 function listenWhenActive(...args: Parameters<typeof Storyteller.addListener>) {
   AppState.addEventListener("change", (appState) => {
@@ -20,13 +21,14 @@ function listenWhenActive(...args: Parameters<typeof Storyteller.addListener>) {
 }
 
 export function addStorytellerEventListeners(store: AppStore) {
-  let lastPositionDispatch = 0
-  listenWhenActive("positionChanged", ({ position }) => {
-    const now = Date.now()
-    if (now - lastPositionDispatch < 500) return
-
-    lastPositionDispatch = now
+  // Throttled with a trailing call: the last position in a burst (the end of a
+  // slider drag, a seek while paused) must still reach the store, or the seek
+  // bar snaps back to the stale position.
+  const dispatchPosition = throttle((position: number) => {
     store.dispatch(bookshelfSlice.actions.audioPositionChanged({ position }))
+  }, 500)
+  listenWhenActive("positionChanged", ({ position }) => {
+    dispatchPosition(position)
   })
 
   listenWhenActive("trackChanged", ({ track, position, index }) => {

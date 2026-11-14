@@ -274,7 +274,8 @@ object BookService {
     fun getFragment(bookUuid: String, clipUrl: String, position: Double): OverlayPar? {
         val clips = this.clips[bookUuid] ?: return null
 
-        val clipsInUrl = clips.filter { it.audioResource == clipUrl }
+        val key = audioResourceKey(clipUrl)
+        val clipsInUrl = clips.filter { audioResourceKey(it.audioResource) == key }
 
         return searchForClip(clipsInUrl, position)
     }
