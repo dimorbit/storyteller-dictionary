@@ -28,7 +28,7 @@ object ClipTextExtractor {
 
         // A media-overlay anchor can also wrap its own text. In that case the
         // anchor is already the narrowest element for Readium to search within.
-        val ownText = anchor.text().normalizedText()
+        val ownText = anchor.wholeText()
         if (ownText.isNotEmpty()) {
             return ClipText(ownText, null, null, anchor.cssSelector())
         }
@@ -62,8 +62,8 @@ object ClipTextExtractor {
         val after = nextAnchor?.endSourceRange()?.endPos()?.let { afterStart ->
             htmlText(xhtml, afterStart, parentEnd.startPos())
         }
-        val parentContext = parent.text().normalizedText()
-        val otherContext = parentContext.takeUnless { it == highlight }
+        val parentContext = parent.wholeText()
+        val otherContext = parentContext.takeUnless { containsNormalizedText(it, highlight) }
 
         return ClipText(
             highlight = highlight,
@@ -75,8 +75,9 @@ object ClipTextExtractor {
 
     private fun htmlText(xhtml: String, start: Int, end: Int): String? {
         if (start < 0 || start > end || end > xhtml.length) return null
-        return Jsoup.parse(xhtml.substring(start, end), "", Parser.xmlParser()).text().normalizedText().takeIf { it.isNotEmpty() }
+        return Jsoup.parse(xhtml.substring(start, end), "", Parser.xmlParser()).wholeText().takeIf { it.isNotBlank() }
     }
 
-    private fun String.normalizedText(): String = replace(Regex("\\s+"), " ").trim()
+    private fun containsNormalizedText(text: String, needle: String): Boolean =
+        text.replace(Regex("\\s+"), " ").trim().contains(needle.replace(Regex("\\s+"), " ").trim())
 }

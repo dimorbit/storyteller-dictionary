@@ -20,8 +20,8 @@ class ClipTextExtractorTest {
             listOf("one", "two", "three"),
         )
 
-        assertEquals("Listen to this & that.", text?.highlight)
-        assertEquals("Before this sentence.", text?.before)
+        assertEquals("Listen to this & that.\n\u0020\u0020\u0020\u0020", text?.highlight)
+        assertEquals("Before this sentence.\n\u0020\u0020\u0020\u0020", text?.before)
         assertEquals("After this sentence.", text?.after)
         assertEquals("#paragraph", text?.cssSelector)
     }
@@ -38,7 +38,7 @@ class ClipTextExtractorTest {
         )
 
         assertEquals("Finis “now.”", text?.highlight)
-        assertEquals("Before.", text?.before)
+        assertEquals("Before. ", text?.before)
         assertNull(text?.after)
         assertEquals("#paragraph", text?.cssSelector)
     }
@@ -54,7 +54,7 @@ class ClipTextExtractorTest {
             listOf("sentence:one", "next"),
         )
 
-        assertEquals("Sentence with 'quotes'.", text?.highlight)
+        assertEquals("\n  Sentence with 'quotes'. ", text?.highlight)
         // The element exists but needs CSS escaping; a unique quote is a safer scope.
         assertNotEquals("#sentence:one", text?.cssSelector)
     }
@@ -69,6 +69,20 @@ class ClipTextExtractorTest {
 
         assertEquals("Only this.", text?.highlight)
         assertEquals("#clip", text?.cssSelector)
+        assertNull(text?.before)
+        assertNull(text?.after)
+    }
+
+    @Test
+    fun `wrapped clip preserves whitespace required by the raw DOM quote matcher`() {
+        val text = ClipTextExtractor.extract(
+            "<html><body><p><span id=\"wrap\">one\n                two</span></p></body></html>",
+            "wrap",
+            listOf("wrap"),
+        )
+
+        assertEquals("one\n                two", text?.highlight)
+        assertEquals("#wrap", text?.cssSelector)
         assertNull(text?.before)
         assertNull(text?.after)
     }
