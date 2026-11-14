@@ -4,6 +4,9 @@ package expo.modules.readium
 
 import android.net.Uri
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.jsoup.nodes.Document
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.InternalReadiumApi
 import org.readium.r2.shared.publication.Href
@@ -137,8 +140,71 @@ object BookService {
         return publication.positionsByReadingOrder()[readingOrderIndex].first()
     }
 
+    /** One chapter and the clips already looked up in it, reused by clip events. */
+    private data class FragmentResource(
+        val xhtml: String,
+        val document: Document,
+        val texts: MutableMap<String, ClipText?> = mutableMapOf(),
+    )
+
+    private val clipTextCache = object :
+        LinkedHashMap<Pair<String, String>, FragmentResource>(8, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<Pair<String, String>, FragmentResource>
+        ): Boolean = size > 8
+    }
+    private val clipTextCacheMutex = Mutex()
+
+    private suspend fun parseClipText(
+        bookUuid: String,
+        link: Link,
+        fragment: String,
+        sameResourceFragments: List<String>,
+    ): ClipText? = clipTextCacheMutex.withLock {
+        val href = link.url().toString()
+        val chapter = clipTextCache[bookUuid to href] ?: run {
+            val resource = getPublication(bookUuid)?.get(link) ?: return null
+            val xhtml = try {
+                resource.readDecodeOrNull { Try.success(it.decodeString()) }?.getOrNull()
+            } finally {
+                resource.close()
+            } ?: return null
+            FragmentResource(xhtml, ClipTextExtractor.parseDocument(xhtml)).also {
+                clipTextCache[bookUuid to href] = it
+            }
+        }
+        chapter.texts.getOrPut(fragment) {
+            ClipTextExtractor.extract(chapter.document, chapter.xhtml, fragment, sameResourceFragments)
+        }
+    }
+
+
     @OptIn(InternalReadiumApi::class)
-    suspend fun buildFragmentLocator(bookUuid: String, href: Url, fragment: String): Locator {
+    internal suspend fun buildFragmentProgression(bookUuid: String, href: Url, fragment: String): Double? {
+        val publication = getPublication(bookUuid) ?: return null
+        val link = publication.linkWithHref(href) ?: return null
+        val resource = publication.get(link) ?: return null
+        val htmlContent = try {
+            resource.readDecodeOrNull { Try.success(it.decodeString()) }?.getOrNull()
+        } finally {
+            resource.close()
+        } ?: return null
+        val start = fragmentIdMatch(htmlContent, fragment) ?: return null
+        return start.toDouble() / htmlContent.length
+    }
+
+    private fun fragmentIdMatch(xhtml: String, fragment: String): Int? =
+        Regex("""\bid\s*=\s*(["'])${Regex.escape(fragment)}\1""").find(xhtml)?.range?.start
+
+    @OptIn(InternalReadiumApi::class)
+    suspend fun buildFragmentLocator(
+        bookUuid: String,
+        href: Url,
+        fragment: String,
+        // Binary extent search never needs a costly quote locator. The normal
+        // readaloud locator keeps the full text/context via this default.
+        includeText: Boolean = true,
+    ): Locator {
         val publication = getPublication(bookUuid)
             ?: throw Exception("Publication for book $bookUuid is unopened.")
 
@@ -157,13 +223,14 @@ object BookService {
         } ?: return defaultLocator
         val fragmentRegex = Regex("""\bid\s*=\s*(["'])${Regex.escape(fragment)}\1""")
         val startOfFragment = fragmentRegex.find(htmlContent)?.range?.start ?: return defaultLocator
-        val clipText = ClipTextExtractor.extract(
-            htmlContent,
-            fragment,
-            clips[bookUuid].orEmpty()
+        val clipText = if (includeText) parseClipText(
+            bookUuid,
+            link,
+            fragment = fragment,
+            sameResourceFragments = clips[bookUuid].orEmpty()
                 .filter { Url.fromEpubHref(it.textResource) == href }
                 .map { it.fragmentId },
-        )
+        ) else null
         val progression = startOfFragment.toDouble() / htmlContent.length.toDouble()
         val startOfChapterProgression =
             locateFromPositions(bookUuid, link).locations.totalProgression
@@ -189,8 +256,7 @@ object BookService {
                 fragments = listOf(fragment),
                 progression = progression,
                 totalProgression = totalProgression,
-                // The HTML cssSelector extension reads this un-prefixed JSON
-                // field from otherLocations in Readium 3.1.2.
+                // Readium 3.1.2's cssSelector extension reads this JSON field directly.
                 otherLocations = clipText?.cssSelector?.let { mapOf("cssSelector" to it) }
                     ?: emptyMap(),
             ),
@@ -408,11 +474,11 @@ suspend fun searchForClipByProgression(bookUuid: String, clips: List<OverlayPar>
         val midItem = clips[midIndex]
         val prevIndex = midIndex.dec()
         val prevItem = if (prevIndex < 0) null else clips[prevIndex]
-        if (progression > (BookService.buildFragmentLocator(bookUuid,Url.fromEpubHref(midItem.textResource)!!, midItem.fragmentId).locations.progression ?: 0.0)) {
+        if (progression > (BookService.buildFragmentProgression(bookUuid, Url.fromEpubHref(midItem.textResource)!!, midItem.fragmentId) ?: 0.0)) {
             startIndex = midIndex + 1
             continue
         }
-        if (prevItem != null && progression < (BookService.buildFragmentLocator(bookUuid,Url.fromEpubHref(midItem.textResource)!!, midItem.fragmentId).locations.progression ?: 0.0)) {
+        if (prevItem != null && progression < (BookService.buildFragmentProgression(bookUuid, Url.fromEpubHref(midItem.textResource)!!, midItem.fragmentId) ?: 0.0)) {
             endIndex = midIndex - 1
             continue
         }

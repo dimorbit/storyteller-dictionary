@@ -312,11 +312,15 @@ startAppListening({
     scheduleJumpTimeout(bookUuid, timestamp, JUMP_TARGET_RESOLUTION_BOUND_MS, expire)
     const cancelExpiry = () => clearJumpTimeout(bookUuid, timestamp)
     listenerApi.signal.addEventListener("abort", cancelExpiry, { once: true })
+    let hadTarget = getJumpHold(listenerApi.getState())?.target !== undefined
     try {
       await listenerApi.condition((_, state) => {
         const hold = getJumpHold(state)
         if (hold?.bookUuid !== bookUuid || hold.timestamp !== timestamp) return true
-        if (hold.target) {
+        if (hold.target && !hadTarget) {
+          hadTarget = true
+          // Arm only on the transition to a resolved target. Player position
+          // actions must not postpone this deadline forever.
           scheduleJumpTimeout(bookUuid, timestamp, JUMP_TARGET_PLAYBACK_BOUND_MS, expire)
         }
         return false

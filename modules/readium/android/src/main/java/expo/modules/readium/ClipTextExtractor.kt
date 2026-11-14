@@ -1,6 +1,7 @@
 package expo.modules.readium
 
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.parser.Parser
 
 /** The text and enclosing selector needed by Readium's quote-based range finder. */
@@ -13,8 +14,14 @@ data class ClipText(
 
 /** Extracts clip text without relying on the shape or attributes of its span tags. */
 object ClipTextExtractor {
-    fun extract(xhtml: String, fragment: String, sameResourceFragments: List<String>): ClipText? {
-        val document = Jsoup.parse(xhtml, "", Parser.xmlParser().setTrackPosition(true))
+    /** Parse once; source offsets are used only for reading back the original text. */
+    fun parseDocument(xhtml: String): Document =
+        Jsoup.parse(xhtml, "", Parser.xmlParser().setTrackPosition(true))
+
+    fun extract(xhtml: String, fragment: String, sameResourceFragments: List<String>): ClipText? =
+        extract(parseDocument(xhtml), xhtml, fragment, sameResourceFragments)
+
+    fun extract(document: Document, xhtml: String, fragment: String, sameResourceFragments: List<String>): ClipText? {
         val anchor = document.getElementById(fragment) ?: return null
         val anchorRange = anchor.sourceRange()
         if (anchorRange.isImplicit()) return null

@@ -1431,11 +1431,15 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         activity.lifecycleScope.launch {
             val result = getFragmentPageProportion(fragmentId) ?: return@launch
-            val beforePage = result["beforePage"] as? Boolean ?: false
+            val currentProps = props ?: return@launch
+            if (!currentProps.isPlaying || !layoutBehavior().supportsPagedClipScheduling ||
+                currentProps.locator?.locations?.fragments?.firstOrNull() != fragmentId
+            ) return@launch
+            val beforePage = result["beforePage"] as? Boolean ?: return@launch
             if (beforePage) {
-                // A corrected clip can land on the page before the one on screen.
-                // The forward-only schedule below would leave its highlight invisible.
-                props?.locator?.let { go(it) }
+                // The JavaScript measurement was asynchronous. Do not follow a
+                // clip that stopped or changed before this result arrived.
+                currentProps.locator?.let { go(it) }
                 return@launch
             }
             val crossesPage = result["crossesPage"] as? Boolean ?: return@launch
@@ -1445,10 +1449,18 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
             player.scheduleClipEvent(fragmentId, proportion) {
                 activity.lifecycleScope.launch {
-                    if (!layoutBehavior().supportsPagedClipScheduling) return@launch
+                    if (props?.isPlaying != true ||
+                        props?.locator?.locations?.fragments?.firstOrNull() != fragmentId ||
+                        !layoutBehavior().supportsPagedClipScheduling
+                    ) return@launch
 
-                    val recheck = getFragmentPageProportion(fragmentId)
-                    val overflowsRight = (recheck?.get("crossesPage") as? Boolean) ?: false
+                    val recheck = getFragmentPageProportion(fragmentId) ?: return@launch
+                    val liveProps = props ?: return@launch
+                    if (!liveProps.isPlaying ||
+                        liveProps.locator?.locations?.fragments?.firstOrNull() != fragmentId ||
+                        !layoutBehavior().supportsPagedClipScheduling
+                    ) return@launch
+                    val overflowsRight = recheck["crossesPage"] as? Boolean ?: false
 
                     if (overflowsRight) {
                         // not animated
@@ -2243,6 +2255,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     let totalWidth = 0;
                     let beforePage = true;
                     let afterPage = true;
+                    let crossesPage = false;
                     for (const rect of rects) {
                         const left = rect.left + scroller.scrollLeft;
                         const right = rect.right + scroller.scrollLeft;
@@ -2250,12 +2263,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         totalWidth += width;
                         beforePage = beforePage && right <= leadingEdge;
                         afterPage = afterPage && left >= leadingEdge + pageWidth;
+                        if (right > leadingEdge + pageWidth) crossesPage = true;
                         const overlap = Math.min(right, leadingEdge + pageWidth) - Math.max(left, leadingEdge);
                         if (overlap > 0) visibleWidth += overlap;
                     }
 
                     return {
-                        crossesPage: !beforePage && !afterPage && visibleWidth < totalWidth,
+                        crossesPage,
                         beforePage,
                         proportionOnCurrentPage: visibleWidth / totalWidth
                     };
@@ -2303,6 +2317,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             searchDictionaryEntries(locator.href)
         }
 
+        if (props!!.isPlaying && props!!.locator?.href == locator.href) {
+            // A same-chapter page turn does not change href. Repaint only from
+            // the navigator's locator callback, not every prop reconciliation.
+            requestedReadaloudDecoration = null
+            applyReadaloudDecoration(props!!.locator!!)
+        }
+
         if (locator.href != props!!.locator?.href || changingResource) {
             changingResource = false
 
@@ -2319,13 +2340,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 })
             """.trimIndent()
             )
-            if (props!!.isPlaying && props!!.locator?.href == locator.href) {
-                // A page turn changes the visible frame, but the decoration request
-                // is identical. Drop the dedupe marker so the mark is painted on the
-                // new page instead of staying on the old one.
-                requestedReadaloudDecoration = null
-                applyReadaloudDecoration(props!!.locator!!)
-            }
             emitCurrentLocator()
         } else {
             emitCurrentLocator()
