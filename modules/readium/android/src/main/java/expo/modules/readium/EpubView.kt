@@ -2871,6 +2871,18 @@ window.storytellerClampDictionary();
         val group = "readium.getDecorations('dictionary')"
         val body = StringBuilder("(function () {")
         body.append("var g = $group; if (!g) return 'no-group';")
+        // Readium's hit-test reverses `items` in place on every decoration tap. Closing
+        // a menu used to rebuild the group, which reset that order; a class-only update
+        // leaves it reversed, so a second tap checks the passage before the word inside
+        // it. Put the items back in painted order (shortest covered mark last, so it wins
+        // the hit-test) without repainting the dots.
+        val painted = appliedDictionaryDecorations.joinToString(",") { "'" + selector(it.id) + "'" }
+        body.append("var rank = {}; [").append(painted)
+        body.append("].forEach(function (id, i) { rank[id] = i; });")
+        body.append("g.items.sort(function (a, b) {")
+        body.append("var ra = rank[a.decoration.id], rb = rank[b.decoration.id];")
+        body.append("if (ra === undefined) ra = 1e9; if (rb === undefined) rb = 1e9;")
+        body.append("return ra - rb; });")
         // The reflow observer reads this after Readium rebuilds boxes from the
         // template, so an open menu keeps its wash when an image finishes loading.
         body.append("window.__storytellerActiveDecorationId = ")
