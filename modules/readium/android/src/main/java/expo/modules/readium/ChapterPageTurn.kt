@@ -44,10 +44,16 @@ internal object ChapterPageTurn {
         animated: Boolean,
         rtl: Boolean,
     ): Boolean? {
-        val webView = webViews.firstOrNull { view ->
+        val candidates = webViews.filter { view ->
             isVisible(view) && (intGetter(view, "getNumPages") ?: 0) > 1 &&
                 intGetter(view, "getMCurItem") != null
-        } ?: return null
+        }
+        // During an animated chapter transition both the outgoing and incoming WebViews are
+        // visible. Which one Readium has selected is not reflected here, so turning either
+        // could scroll the old chapter and swallow the requested turn. Fall back to Readium
+        // while more than one chapter is visible.
+        if (candidates.size != 1) return null
+        val webView = candidates[0]
 
         val pages = intGetter(webView, "getNumPages") ?: return null
         if (pages <= 1) return null
@@ -61,25 +67,25 @@ internal object ChapterPageTurn {
         }
 
         // R8 inlines setCurrentItem(int, boolean) into its callers, so in a release APK
-        // that name is gone. The retained internal setter is (index, velocity, animated)
-        // and drives the same native Scroller.
+        // that name is gone. The retained internal setter is setCurrentItemInternal(index,
+        // smoothScroll, velocity) and drives the same native Scroller.
         val intType = Int::class.javaPrimitiveType
         val boolType = Boolean::class.javaPrimitiveType
         val setter = methods(webView).firstOrNull { m ->
             m.name == "setCurrentItem" &&
                 m.parameterTypes.contentEquals(arrayOf(intType, boolType))
         } ?: methods(webView).firstOrNull { m ->
-            m.returnType == Void.TYPE &&
-                m.declaringClass.name == "org.readium.r2.navigator.R2WebView" &&
-                m.parameterTypes.contentEquals(arrayOf(intType, intType, boolType))
+            m.name.startsWith("setCurrentItemInternal") &&
+                m.returnType == Void.TYPE &&
+                m.parameterTypes.contentEquals(arrayOf(intType, boolType, intType))
         } ?: return null
 
         return try {
             setter.isAccessible = true
-            if (setter.parameterTypes.size == 2) {
-                setter.invoke(webView, target, animated)
-            } else {
-                setter.invoke(webView, target, 0, animated)
+            when (setter.parameterTypes.size) {
+                2 -> setter.invoke(webView, target, animated)
+                3 -> setter.invoke(webView, target, animated, 0)
+                else -> return null
             }
             true
         } catch (_: Throwable) {

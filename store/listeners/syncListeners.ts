@@ -318,11 +318,10 @@ startAppListening({
       listenerApi.dispatch(clearReturnPosition({ bookUuid }))
     }, RETURN_POSITION_TIMEOUT_MS)
     returnTimeouts.set(bookUuid, handle)
-    listenerApi.signal.addEventListener(
-      "abort",
-      () => clearReturnTimeout(bookUuid),
-      { once: true },
-    )
+    // No abort listener: this effect is synchronous, so RTK aborts the signal on
+    // normal completion and would cancel the timeout we just scheduled. Cleanup is
+    // handled by the clearReturnPosition/returnToPreviousPosition listener and the
+    // handle identity check in the timeout itself.
   },
 })
 
