@@ -656,7 +656,12 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           // the side zones turned the page instead, so the chrome stayed up and the
           // page moved behind it.
           readerUiVisible={preferences?.showReaderUi ?? false}
-          volumeKeysTurnPages={preferences?.volumeKeysTurnPages ?? false}
+          // A reader sheet (footnote, menus, definition) covers the page but leaves the
+          // view mounted. Without this the native gate still claims volume keys and the
+          // JS listener turns pages behind the sheet instead of changing the volume.
+          volumeKeysTurnPages={
+            (preferences?.volumeKeysTurnPages ?? false) && !isReaderSheetOpen
+          }
           invertVolumeKeys={invertVolumeKeys}
           colorTheme={{ foreground, background }}
           customFonts={customFonts?.map((font) => ({

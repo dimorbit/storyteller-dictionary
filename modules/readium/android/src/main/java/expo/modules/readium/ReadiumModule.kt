@@ -334,6 +334,10 @@ class ReadiumModule : Module(), Listener {
                 view.pendingProps.activeDictionaryDecorationId = prop
             }
 
+            Prop("activeHighlightDecorationId") { view: EpubView, prop: String? ->
+                view.pendingProps.activeHighlightDecorationId = prop
+            }
+
             Prop("bookmarks") { view: EpubView, prop: List<Map<String, Any>> ->
                 val bookmarks = prop.mapNotNull { Locator.fromJSON(JSONObject(it)) }
 
