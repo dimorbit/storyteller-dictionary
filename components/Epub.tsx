@@ -550,7 +550,10 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
       )}
       {/* Overlays the page top so showing it never resizes the reader. Stays
           before SelectionMenu so its backdrop (also z-2) sits above the bar. */}
-      {(rail || toolbarHeight > 0) && !isReaderSheetOpen && (
+      {(rail || toolbarHeight > 0) &&
+        !isReaderSheetOpen &&
+        !!returnPosition &&
+        !!preferences?.showReaderUi && (
         <HideableView
           hidden={!preferences?.showReaderUi}
           className="absolute z-2"

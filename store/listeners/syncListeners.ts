@@ -16,6 +16,7 @@ import {
   bookDoubleTapped,
   bookLocatorChanged,
   bookmarkPressed,
+  clearReturnPosition,
   miniPlayerSliderChapterPositionChanged,
   navItemPressed,
   nextTrackPressed,
@@ -269,6 +270,15 @@ startAppListening({
 
 const JUMP_TARGET_RESOLUTION_BOUND_MS = 60_000
 const JUMP_TARGET_PLAYBACK_BOUND_MS = 30_000
+const RETURN_POSITION_TIMEOUT_MS = 10_000
+
+const returnTimeouts = new Map<UUID, ReturnType<typeof setTimeout>>()
+
+function clearReturnTimeout(bookUuid: UUID) {
+  const handle = returnTimeouts.get(bookUuid)
+  if (handle) clearTimeout(handle)
+  returnTimeouts.delete(bookUuid)
+}
 
 const jumpTimeoutKey = (bookUuid: UUID, timestamp: number) => `${bookUuid}:${timestamp}`
 const jumpTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
@@ -296,6 +306,32 @@ function scheduleJumpTimeout(
   }, delay)
   jumpTimeouts.set(key, handle)
 }
+
+startAppListening({
+  matcher: isAnyOf(bookmarkPressed, navItemPressed),
+  effect: ({ payload }, listenerApi) => {
+    const { bookUuid } = payload as { bookUuid: UUID }
+    clearReturnTimeout(bookUuid)
+    const handle = setTimeout(() => {
+      if (returnTimeouts.get(bookUuid) !== handle) return
+      returnTimeouts.delete(bookUuid)
+      listenerApi.dispatch(clearReturnPosition({ bookUuid }))
+    }, RETURN_POSITION_TIMEOUT_MS)
+    returnTimeouts.set(bookUuid, handle)
+    listenerApi.signal.addEventListener(
+      "abort",
+      () => clearReturnTimeout(bookUuid),
+      { once: true },
+    )
+  },
+})
+
+startAppListening({
+  matcher: isAnyOf(clearReturnPosition, returnToPreviousPosition),
+  effect: ({ payload }) => {
+    clearReturnTimeout((payload as { bookUuid: UUID }).bookUuid)
+  },
+})
 
 startAppListening({
   actionCreator: bookmarkPressed,
