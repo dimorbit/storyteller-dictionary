@@ -181,14 +181,13 @@ class ReadiumModule : Module(), Listener {
                 { bookUuid: String, locatorMap: Map<String, Any> ->
                     val locatorJson = JSONObject(locatorMap)
                     val locator = Locator.fromJSON(locatorJson) ?: return@Coroutine null
-                    val exact = try {
-                        Result.success(BookService.getClip(bookUuid, locator))
-                    } catch (e: NoSuchElementException) {
-                        Result.failure(e)
-                    }
-                    val clip = exact.getOrNull()
+                    // getClip now returns null instead of throwing for an unknown
+                    // fragment, so the progression fallback is simply the second
+                    // attempt. A chapter with no clips at all yields null, which
+                    // JS already handles; it must not reject the promise.
+                    val exact = runCatching { BookService.getClip(bookUuid, locator) }.getOrNull()
+                    val clip = exact
                         ?: BookService.getClipByProgression(bookUuid, locator)
-                        ?: exact.getOrThrow()
                         ?: return@Coroutine null
 
                     return@Coroutine clip.toJson()
@@ -251,7 +250,8 @@ class ReadiumModule : Module(), Listener {
                 "onHighlightTap",
                 "onDictionaryTap",
                 "onBookmarksActivate",
-                "onShowFootnote"
+                "onShowFootnote",
+                "onPageTurned"
             )
 
             Prop("bookUuid") { view: EpubView, prop: String ->
@@ -259,13 +259,11 @@ class ReadiumModule : Module(), Listener {
             }
 
             AsyncFunction("goForward") { view: EpubView ->
-                val navigator = view.navigator ?: return@AsyncFunction
-                navigator.goForward(animated = true)
+                view.turnPageForward(animated = true)
             }
 
             AsyncFunction("goBackward") { view: EpubView ->
-                val navigator = view.navigator ?: return@AsyncFunction
-                navigator.goBackward(animated = true)
+                view.turnPageBackward(animated = true)
             }
 
             AsyncFunction("clearSelection") { view: EpubView ->
@@ -336,6 +334,14 @@ class ReadiumModule : Module(), Listener {
                 view.pendingProps.activeDictionaryDecorationId = prop
             }
 
+            Prop("activeHighlightDecorationId") { view: EpubView, prop: String? ->
+                view.pendingProps.activeHighlightDecorationId = prop
+            }
+
+            Prop("selectionMenuVisible") { view: EpubView, prop: Boolean ->
+                view.pendingProps.selectionMenuVisible = prop
+            }
+
             Prop("bookmarks") { view: EpubView, prop: List<Map<String, Any>> ->
                 val bookmarks = prop.mapNotNull { Locator.fromJSON(JSONObject(it)) }
 
@@ -363,6 +369,20 @@ class ReadiumModule : Module(), Listener {
 
             Prop("jumpBarBottom") { view: EpubView, prop: Double? ->
                 view.pendingProps.jumpBarBottom = prop ?: 0.0
+            }
+
+            // While the reader UI is on screen, taps only dismiss it and never reach
+            // the book; see the input listener in EpubView.
+            Prop("readerUiVisible") { view: EpubView, prop: Boolean? ->
+                view.pendingProps.readerUiVisible = prop ?: false
+            }
+
+            Prop("volumeKeysTurnPages") { view: EpubView, prop: Boolean? ->
+                view.pendingProps.volumeKeysTurnPages = prop ?: false
+            }
+
+            Prop("invertVolumeKeys") { view: EpubView, prop: Boolean? ->
+                view.pendingProps.invertVolumeKeys = prop ?: false
             }
 
             Prop("fontScale") { view: EpubView, prop: Double ->

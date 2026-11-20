@@ -49,6 +49,8 @@ export const defaultPreferences: Preferences = {
     scroll: false,
   },
   floatingToolbar: false,
+  volumeKeysTurnPages: false,
+  invertVolumeKeys: false,
   readaloudColor: "yellow",
   readaloudDecoratorStyle: "highlight",
   customFonts: [],
@@ -139,4 +141,10 @@ export interface Preferences {
   automaticRewind: AutomaticRewindPreferences
   logLevel: "debug" | "info" | "error"
   floatingToolbar: boolean
+  // Turn the page with the volume buttons, but only while the reader UI is hidden;
+  // with the UI up they keep changing the volume. See ReaderInputState on the
+  // Android side for why the check has to be split across two entry points.
+  volumeKeysTurnPages: boolean
+  // Swap which volume button goes forward, for readers used to the other way round.
+  invertVolumeKeys: boolean
 }
