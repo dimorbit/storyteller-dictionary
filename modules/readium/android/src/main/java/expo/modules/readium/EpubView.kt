@@ -51,7 +51,7 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.InternalReadiumApi
 import org.readium.r2.shared.extensions.toMap
 import org.readium.r2.shared.publication.Locator
-import org.readium.r2.shared.publication.ReadingProgression
+import org.readium.r2.navigator.preferences.ReadingProgression
 import org.readium.r2.shared.publication.indexOfFirstWithHref
 import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.shared.util.Url
@@ -557,7 +557,11 @@ window.storytellerClampDictionary();
     private fun publishReaderInputState() {
         val currentProps = props ?: return
         ReaderInputState.readerUiVisible = currentProps.readerUiVisible
-        ReaderInputState.volumeKeysTurnPages = currentProps.volumeKeysTurnPages
+        // The reader stays mounted under the definition screen. Only an attached view
+        // may claim the volume keys, or a prop update from readaloud re-enables the
+        // gate on a screen where the JS page-turn listener is hidden.
+        ReaderInputState.volumeKeysTurnPages =
+            currentProps.volumeKeysTurnPages && isAttachedToWindow
         ReaderInputState.invertVolumeKeys = currentProps.invertVolumeKeys
         publishHasSelection()
     }
@@ -1451,8 +1455,6 @@ window.storytellerClampDictionary();
 
     fun initializeNavigator() {
         val publication = BookService.getPublication(props!!.bookUuid) ?: return
-        chapterTurnRtl =
-            publication.metadata.readingProgression == ReadingProgression.RTL
 
         val fragmentTag = resources.getString(R.string.epub_fragment_tag)
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
@@ -1479,6 +1481,10 @@ window.storytellerClampDictionary();
         addView(epubFragment.view)
 
         navigator = epubFragment.navigator
+        // Use the direction the navigator actually resolved. The raw metadata is null
+        // for books that rely on their language, which Readium still lays out RTL.
+        chapterTurnRtl =
+            navigator?.settings?.value?.readingProgression == ReadingProgression.RTL
         // The fragment was created with these initial preferences already applied.
         submittedPreferences = layoutPreferences()
         navigator?.publicationView?.let { disableOverscroll(it) }
@@ -2724,11 +2730,12 @@ window.storytellerClampDictionary();
                         val old = before[next.id]
                         old != null && (old.locator != next.locator || old.style != next.style)
                     }
-                    // A shrink or a reused id with different content makes Readium's diff
-                    // emit a Change with an old-list index, which crashes on the new list.
-                    if (chapterChanged || contentChanged ||
-                        dictionaryDecorations.size < appliedDictionaryDecorations.size
-                    ) {
+                    val idsChanged =
+                        dictionaryDecorations.map { it.id } != appliedDictionaryDecorations.map { it.id }
+                    // Readium's diff reads target[i] for a Change and insertions, with an
+                    // index from the old list. A shrink, a reused id with changed content,
+                    // or an insertion that shifts later ids all index the wrong list.
+                    if (chapterChanged || contentChanged || idsChanged) {
                         navigator?.applyDecorations(emptyList(), group = "dictionary")
                     }
                     navigator?.applyDecorations(dictionaryDecorations.toList(), group = "dictionary")
@@ -3697,12 +3704,11 @@ window.storytellerClampDictionary();
         // the selection vanishing the moment a drag began; and a swipe that is aborted
         // should leave the selection alone. From here on the page is gone, so the
         // selection goes with it.
-        if (pageTurned && wasSwiping &&
-            SystemClock.elapsedRealtime() <= swipeSelectionClearDeadline
-        ) {
-            // Read before the flag is reset below: clearing it first made the wash
-            // condition underneath true for EVERY swipe turn, so the highlight was
-            // dropped on the very turns that were meant to keep it.
+        if (pageTurned) {
+            // A real turn always cancels a pending "restore". A swipe longer than the
+            // collapse deadline would otherwise emit restore from its release timer and
+            // put the old page's menu back on the new page. wasSwiping was captured
+            // above, so the wash decision below is unaffected.
             swipeSelectionCleared = false
         }
         if (pageTurned && activeDictionaryId != null && !wasSwiping) {
