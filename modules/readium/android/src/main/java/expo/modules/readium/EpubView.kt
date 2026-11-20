@@ -2739,7 +2739,13 @@ window.storytellerClampDictionary();
                     navigator?.applyDecorations(emptyList(), group = "dictionary")
                     appliedDictionaryDecorations = listOf()
                 }
-                return@launch
+                // This paint can wait on the mutex behind another one. A search that
+                // finished while we waited replaces the list and sets the pending flag;
+                // returning now would drop those marks until the next refresh. Fall
+                // through to the pending loop so they get painted.
+                if (!dictionaryDecorationPending && dictionaryDecorations.isEmpty()) {
+                    return@launch
+                }
             }
             do {
                 dictionaryDecorationPending = false
@@ -3471,6 +3477,21 @@ window.storytellerClampDictionary();
     override fun onPageLoaded() {
         injectCustomFonts()
         navigator?.publicationView?.let { disableOverscroll(it) }
+
+        // A layout switch rebuilds the page documents but keeps the chapter, so no
+        // dictionary paint runs and boxes recreated from the template keep the pending
+        // class that hides their dots. Re-clamp and re-install the reflow observer here,
+        // mirroring the paint path, so the underlines appear without another paint.
+        // evaluateJavascript is suspending, and Readium may register the rebuilt boxes
+        // just after this callback, so install first and clamp again after a settle.
+        activity?.lifecycleScope?.launch {
+            navigator?.evaluateJavascript(clampDictionaryDecorations)
+            navigator?.evaluateJavascript(installDictionaryClampObserverJs())
+            delay(DICTIONARY_DECORATION_GAP_MS)
+            navigator?.evaluateJavascript(
+                "if (window.storytellerClampDictionary) window.storytellerClampDictionary();"
+            )
+        }
 
         if (!firstPageLoaded.isCompleted) {
             firstPageLoaded.complete(Unit)
