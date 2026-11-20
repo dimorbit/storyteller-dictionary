@@ -49,7 +49,11 @@ object ClipTextExtractor {
             .filter { it != fragment }
             .mapNotNull { id -> document.getElementById(id) }
             .firstOrNull { next -> next.sourceRange().startPos() >= textStart }
-        val clipEnd = nextAnchor?.sourceRange()?.startPos() ?: parentEnd.startPos()
+        // The next marker can be in a later paragraph. Keep the quote inside its
+        // own parent so the parent's cssSelector can still resolve it.
+        val nextStart = nextAnchor?.sourceRange()?.startPos()
+        val clipEnd = nextStart?.let { minOf(it, parentEnd.startPos()) }
+            ?: parentEnd.startPos()
         if (anchorRange.endPos() > clipEnd) return null
 
         // Empty media-overlay spans mark a sentence boundary, rather than wrap
