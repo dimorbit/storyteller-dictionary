@@ -51,6 +51,7 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.InternalReadiumApi
 import org.readium.r2.shared.extensions.toMap
 import org.readium.r2.shared.publication.Locator
+import org.readium.r2.shared.publication.ReadingProgression
 import org.readium.r2.shared.publication.indexOfFirstWithHref
 import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.shared.util.Url
@@ -210,7 +211,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // once more after any such reflow, so the dots cannot stay hidden until the
         // next tap. It installs once per page and coalesces bursts with a frame.
 
-        private const val installDictionaryClampObserver = """
+        private fun installDictionaryClampObserverJs() = """
             (function () {
               if (window.__storytellerDictClampInstalled) return "already";
               window.__storytellerDictClampInstalled = true;
@@ -227,13 +228,26 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                   if (typeof window.storytellerClampDictionary === 'function') {
                     window.storytellerClampDictionary();
                   }
+                  // A resize rebuilds boxes from the inactive template. Put the wash
+                  // back so an open menu keeps its blue mark after an image loads.
+                  var active = window.__storytellerActiveDecorationId;
+                  if (active) {
+                    var g = readium.getDecorations('dictionary');
+                    if (g && g.items) g.items.forEach(function (i) {
+                      if (i.decoration.id === active && i.container) {
+                        Array.prototype.slice.call(i.container.children).forEach(function (b) {
+                          b.classList.add('$dictionaryActiveClass');
+                        });
+                      }
+                    });
+                  }
                 });
               }
               if (window.ResizeObserver) new ResizeObserver(again).observe(document.body);
               document.addEventListener("load", again, true);
               return "installed";
             })();
-        """
+        """.trimIndent()
 
         private const val clampDictionaryDecorations = """
 window.storytellerClampDictionary = function () {
@@ -538,6 +552,21 @@ window.storytellerClampDictionary();
         ReaderInputState.hasSelection = isSelecting || menuVisible
     }
 
+    // Re-used on attach and after a navigator rebuild: a modal can detach the view
+    // without sending new props, and destroyNavigator clears the activity's gate.
+    private fun publishReaderInputState() {
+        val currentProps = props ?: return
+        ReaderInputState.readerUiVisible = currentProps.readerUiVisible
+        ReaderInputState.volumeKeysTurnPages = currentProps.volumeKeysTurnPages
+        ReaderInputState.invertVolumeKeys = currentProps.invertVolumeKeys
+        publishHasSelection()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        publishReaderInputState()
+    }
+
     override fun onDetachedFromWindow() {
         resetSelectionLayout()
         // The activity reads this gate before JS sees a key. If the reader leaves with
@@ -718,7 +747,7 @@ window.storytellerClampDictionary();
             // ChapterPageTurn returns true when it scrolled the current page itself, and null at a
             // chapter boundary or when the page cannot be measured - both of which Readium's own
             // navigation covers, unchanged.
-            if (ChapterPageTurn.forward(nav, animated = animated) == true) {
+            if (ChapterPageTurn.forward(nav, animated = animated, rtl = chapterTurnRtl) == true) {
                 return@launch
             }
             nav.goForward(animated = animated)
@@ -729,7 +758,7 @@ window.storytellerClampDictionary();
         val host = activity ?: return
         host.lifecycleScope.launch {
             val nav = navigator ?: return@launch
-            if (ChapterPageTurn.backward(nav, animated = animated) == true) {
+            if (ChapterPageTurn.backward(nav, animated = animated, rtl = chapterTurnRtl) == true) {
                 return@launch
             }
             nav.goBackward(animated = animated)
@@ -784,6 +813,7 @@ window.storytellerClampDictionary();
     // the swipe's own deadline is then recognised as that swipe's tail rather than a
     // fresh dismissal, which is what lost the menu and highlight under fast switching.
     private var sawTurnSinceSwipeStart: Boolean = false
+    private var chapterTurnRtl: Boolean = false
     // A word menu can be hidden by a swipe while its wash is kept for the slide. The wash
     // id alone cannot tell the two apart, so volume gating and tap dismissal use this flag.
     private var menuVisible: Boolean = false
@@ -793,6 +823,9 @@ window.storytellerClampDictionary();
 
     fun beginSelection() {
         isSelecting = true
+        // A new selection is not the tail of an earlier swipe, so its cleared event
+        // must be reported normally.
+        sawTurnSinceSwipeStart = false
         publishHasSelection()
         selectionLayoutHoldUntil = SystemClock.elapsedRealtime() + 500
         webViewScrollPositions.clear()
@@ -1285,18 +1318,11 @@ window.storytellerClampDictionary();
             )
 
         // Published for MainActivity, which sees the volume keys before this view does
-        // and cannot read props. Both flags are needed to decide whether a press turns
-        // the page, so they are written together here, on every prop update.
-        ReaderInputState.readerUiVisible = finalProps.readerUiVisible
-        ReaderInputState.volumeKeysTurnPages = finalProps.volumeKeysTurnPages
-        ReaderInputState.invertVolumeKeys = finalProps.invertVolumeKeys
-        // A live text selection or an open word menu both count: volume keys keep their
-        // meaning while either is up, so a press cannot turn the page out from under it.
-        // The menu is not a text selection natively, hence both signals.
+        // and cannot read props. A live selection or an open word menu both keep the
+        // keys at their normal meaning, so the gate is published as one unit.
         props = finalProps
-        publishHasSelection()
+        publishReaderInputState()
 
-        props = finalProps
         if (finalProps.isPlaying || (oldProps?.scrollMode == true && !finalProps.scrollMode) ||
             (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0)
         ) {
@@ -1344,6 +1370,7 @@ window.storytellerClampDictionary();
         ) {
             destroyNavigator()
             initializeNavigator()
+            publishReaderInputState()
         }
 
         if (customFontsChanged) {
@@ -1424,6 +1451,8 @@ window.storytellerClampDictionary();
 
     fun initializeNavigator() {
         val publication = BookService.getPublication(props!!.bookUuid) ?: return
+        chapterTurnRtl =
+            publication.metadata.readingProgression == ReadingProgression.RTL
 
         val fragmentTag = resources.getString(R.string.epub_fragment_tag)
         val activity: FragmentActivity? = appContext.currentActivity as FragmentActivity?
@@ -1432,6 +1461,7 @@ window.storytellerClampDictionary();
 
         lastDictionarySearchHref = null
         dictionaryOccurrences = listOf()
+        appliedDictionaryDecorations = listOf()
         webViews.clear()
         webViewScrollPositions.clear()
 
@@ -1561,6 +1591,7 @@ window.storytellerClampDictionary();
         decoratedDictionaryHref = null
         lastDictionarySearchHref = null
         dictionaryOccurrences = listOf()
+        appliedDictionaryDecorations = listOf()
         webViews.clear()
         webViewScrollPositions.clear()
 
@@ -1720,6 +1751,7 @@ window.storytellerClampDictionary();
      */
     fun clearSelection() {
         val navigator = navigator ?: return
+        sawTurnSinceSwipeStart = false
 
         try {
             navigator.clearSelection()
@@ -2201,6 +2233,9 @@ window.storytellerClampDictionary();
 
     private val dictionaryDecorationMutex = decorationMutex
     private var dictionaryDecorations: List<Decoration> = listOf()
+    // The list last handed to Readium. A retained id whose locator or style changed is
+    // a content Change in Readium's diff, which crashes when the new list is shorter.
+    private var appliedDictionaryDecorations: List<Decoration> = listOf()
     private var dictionaryDecorationJob: Job? = null
     private var dictionaryDecorationPending = false
     private var decoratedDictionaryHref: Url? = null
@@ -2655,6 +2690,7 @@ window.storytellerClampDictionary();
                 dictionaryDecorationMutex.withLock {
                     decoratedDictionaryHref = href
                     navigator?.applyDecorations(emptyList(), group = "dictionary")
+                    appliedDictionaryDecorations = listOf()
                 }
                 return@launch
             }
@@ -2683,10 +2719,20 @@ window.storytellerClampDictionary();
                     // from that empty store, which is why the dots vanished entirely.
                     val chapterChanged = href != decoratedDictionaryHref
                     decoratedDictionaryHref = href
-                    if (chapterChanged) {
+                    val before = appliedDictionaryDecorations.associateBy { it.id }
+                    val contentChanged = dictionaryDecorations.any { next ->
+                        val old = before[next.id]
+                        old != null && (old.locator != next.locator || old.style != next.style)
+                    }
+                    // A shrink or a reused id with different content makes Readium's diff
+                    // emit a Change with an old-list index, which crashes on the new list.
+                    if (chapterChanged || contentChanged ||
+                        dictionaryDecorations.size < appliedDictionaryDecorations.size
+                    ) {
                         navigator?.applyDecorations(emptyList(), group = "dictionary")
                     }
                     navigator?.applyDecorations(dictionaryDecorations.toList(), group = "dictionary")
+                    appliedDictionaryDecorations = dictionaryDecorations.toList()
                 }
                 // The boxes are hidden by the pending class until this sizes them,
                 // so every extra millisecond here is a visible gap on a tap. Readium
@@ -2699,7 +2745,7 @@ window.storytellerClampDictionary();
                 // ResizeObserver, which re-adds the pending class and discards the
                 // sizes written here. That path never calls this method, so watch
                 // the document instead and clamp again after any reflow.
-                navigator?.evaluateJavascript(installDictionaryClampObserver)
+                navigator?.evaluateJavascript(installDictionaryClampObserverJs())
                 // The marks are drawn on the next animation frame, so this runs after the
                 // gap above has let them land. It is not awaited: the reader holds the call
                 // until its page has loaded, and the painter must not wait on that.
@@ -2748,6 +2794,11 @@ window.storytellerClampDictionary();
         val group = "readium.getDecorations('dictionary')"
         val body = StringBuilder("(function () {")
         body.append("var g = $group; if (!g) return 'no-group';")
+        // The reflow observer reads this after Readium rebuilds boxes from the
+        // template, so an open menu keeps its wash when an image finishes loading.
+        body.append("window.__storytellerActiveDecorationId = ")
+        body.append(next?.let { "'" + selector(it) + "'" } ?: "null")
+        body.append(";")
         if (previous != null) {
             body.append("g.items.forEach(function (i) { if (i.decoration.id === '")
             body.append(selector(previous))

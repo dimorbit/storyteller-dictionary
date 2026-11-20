@@ -340,9 +340,20 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     })
     setActiveHighlight(snapshot.activeHighlight)
     setActiveDictionaryEntryUuid(snapshot.activeDictionaryEntryUuid)
-    // Re-applied rather than assumed: the page turn clears the wash natively, so the
-    // mark has to be asked for again on the page it came from.
-    setWashDecorationId(snapshot.washDecorationId)
+    // Re-applied rather than assumed: a non-swipe turn clears the native active id,
+    // and a swipe may have left it set with menu ownership hidden. Sending the same
+    // value twice would be a no-op prop, so clear it first and put it back on the next
+    // frame. That makes native re-open menu ownership and re-add the wash class.
+    const wash = snapshot.washDecorationId
+    if (wash !== null) {
+      setWashDecorationId(null)
+      const token = menuWashToken.current
+      setTimeout(() => {
+        if (menuWashToken.current === token) setWashDecorationId(wash)
+      }, 0)
+    } else {
+      setWashDecorationId(null)
+    }
     // Pinned to the page the snapshot was stored for, not to whatever page the reader is
     // on now: a recompute can move currentPage between the stash and the restore, and the
     // menu would then belong to the wrong page.
@@ -629,6 +640,12 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             uri: getCustomFontUrl(font.filename),
           }))}
           onHighlightTap={(event) => {
+            menuWashToken.current += 1
+            if (menuWashTimer.current !== null) {
+              clearTimeout(menuWashTimer.current)
+              menuWashTimer.current = null
+            }
+            menuPage.current = currentPage.current
             setActiveDictionaryEntryUuid(
               savedWordUuidForText(locator.text?.highlight),
             )

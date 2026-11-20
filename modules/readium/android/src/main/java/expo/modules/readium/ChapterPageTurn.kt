@@ -25,19 +25,32 @@ import org.readium.r2.navigator.epub.EpubNavigatorFragment
 internal object ChapterPageTurn {
 
     /** True when turned here; null when Readium should handle it. */
-    fun forward(navigator: EpubNavigatorFragment, animated: Boolean): Boolean? =
-        turn(navigator, delta = 1, animated = animated)
+    fun forward(
+        navigator: EpubNavigatorFragment,
+        animated: Boolean,
+        rtl: Boolean,
+    ): Boolean? = turn(navigator, delta = 1, animated = animated, rtl = rtl)
 
-    fun backward(navigator: EpubNavigatorFragment, animated: Boolean): Boolean? =
-        turn(navigator, delta = -1, animated = animated)
+    fun backward(
+        navigator: EpubNavigatorFragment,
+        animated: Boolean,
+        rtl: Boolean,
+    ): Boolean? = turn(navigator, delta = -1, animated = animated, rtl = rtl)
 
-    private fun turn(navigator: EpubNavigatorFragment, delta: Int, animated: Boolean): Boolean? {
+    private fun turn(
+        navigator: EpubNavigatorFragment,
+        delta: Int,
+        animated: Boolean,
+        rtl: Boolean,
+    ): Boolean? {
         val webView = currentWebView(navigator) ?: return null
         val pages = intGetter(webView, "getNumPages") ?: return null
         if (pages <= 1) return null
 
         val current = intGetter(webView, "getMCurItem") ?: return null
-        val target = current + delta
+        // In RTL the physical page index runs opposite to reading order. Readium's own
+        // goForward/goBackward account for that, so this path must too.
+        val target = current + if (rtl) -delta else delta
         if (target < 0 || target >= pages) {
             return null
         }
