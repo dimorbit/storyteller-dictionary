@@ -2839,6 +2839,14 @@ window.storytellerClampDictionary();
                 // sizes written here. That path never calls this method, so watch
                 // the document instead and clamp again after any reflow.
                 navigator?.evaluateJavascript(installDictionaryClampObserverJs())
+                // A repaint rebuilds every box from the inactive template, which drops
+                // the wash class. The setter short-circuits when the id is unchanged, so
+                // an Undo that rebuilds the group while a menu is open needs it here.
+                activeDictionaryId?.let { id ->
+                    activity.lifecycleScope.launch {
+                        navigator?.evaluateJavascript(activeMarkScript(null, id))
+                    }
+                }
                 // The marks are drawn on the next animation frame, so this runs after the
                 // gap above has let them land. It is not awaited: the reader holds the call
                 // until its page has loaded, and the painter must not wait on that.
