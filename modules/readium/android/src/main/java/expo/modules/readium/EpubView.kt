@@ -1429,19 +1429,27 @@ window.storytellerClampDictionary();
             pendingJumpLocator = null
             cancelJumpPosition()
         }
-        if (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0) {
-            // The jump that showed the bar shifted the page down so the target was not
-            // hidden behind it. Undo that shift when the bar goes away, otherwise the
-            // reader keeps an empty gap where the bar used to be.
-            val shift = oldProps.jumpBarBottom + 2
+        if (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0 &&
+            // A centre tap hides the UI but keeps the return position alive: the bar goes
+            // to zero through showReaderUi, not through a real dismissal. Moving the page
+            // there is what made hide/show/hide walk the reading position away.
+            !(oldProps.readerUiVisible && !finalProps.readerUiVisible)
+        ) {
+            // Undo only the shift the fallback placement recorded for this resource, and
+            // only while the page has not scrolled since. The measured placement and the
+            // padding path keep their space on their own, so neither leaves an appliedShift.
             activity?.lifecycleScope?.launch {
                 navigator?.evaluateJavascript(
                     """
                     (function () {
+                      var guard = globalThis.__storytellerJumpGuard;
+                      if (!guard || !(guard.appliedShift > 0)) return;
                       var scroller = document.scrollingElement || document.documentElement;
-                      if (!scroller) return;
+                      if (!scroller || scroller.scrollTop !== guard.appliedTop) return;
+                      var shift = guard.appliedShift;
+                      guard.appliedShift = 0;
                       var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
-                      scroller.scrollTop = Math.min(max, scroller.scrollTop + $shift);
+                      scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
                     })();
                     """.trimIndent()
                 )
@@ -3639,6 +3647,7 @@ window.storytellerClampDictionary();
                         }
                         guard.id++;
                         guard.input = false;
+                        guard.appliedShift = 0;
                         return { top: (document.scrollingElement || document.documentElement).scrollTop, time: performance.now(), id: guard.id };
                     })()
                     """.trimIndent()
@@ -3848,6 +3857,10 @@ window.storytellerClampDictionary();
                             if (!storytellerAPI.isJumpPositionCurrent($generation) ||
                                 guard.id !== $landingId || guard.input || performance.now() > $deadline) return;
                             scroller.scrollTop = nextTop;
+                            // The fallback shift is the only one the bar-dismiss undo may
+                            // reverse. Record it so repeated UI hides cannot move the page again.
+                            guard.appliedShift = $barBottom + 2;
+                            guard.appliedTop = scroller.scrollTop;
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
                             else scroller.style.removeProperty('scroll-behavior');

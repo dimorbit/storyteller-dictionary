@@ -44,16 +44,15 @@ internal object ChapterPageTurn {
         animated: Boolean,
         rtl: Boolean,
     ): Boolean? {
-        val candidates = webViews.filter { view ->
-            isVisible(view) && (intGetter(view, "getNumPages") ?: 0) > 1 &&
-                intGetter(view, "getMCurItem") != null
-        }
         // During an animated chapter transition both the outgoing and incoming WebViews are
         // visible. Which one Readium has selected is not reflected here, so turning either
         // could scroll the old chapter and swallow the requested turn. Fall back to Readium
-        // while more than one chapter is visible.
-        if (candidates.size != 1) return null
-        val webView = candidates[0]
+        // while more than one chapter is visible. Count every visible chapter WebView here,
+        // including single-page ones: a single-page incoming chapter must still make the
+        // count 2, or the outgoing WebView gets turned during the transition.
+        val visible = webViews.filter(::isVisible)
+        if (visible.size != 1) return null
+        val webView = visible[0]
 
         val pages = intGetter(webView, "getNumPages") ?: return null
         if (pages <= 1) return null
