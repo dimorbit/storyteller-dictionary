@@ -2858,8 +2858,12 @@ window.storytellerClampDictionary();
                     if (chapterChanged || contentChanged || idsChanged) {
                         navigator?.applyDecorations(emptyList(), group = "dictionary")
                     }
-                    navigator?.applyDecorations(dictionaryDecorations.toList(), group = "dictionary")
-                    appliedDictionaryDecorations = dictionaryDecorations.toList()
+                    // applyDecorations suspends while Readium diffs. A deletion arriving
+                    // in that window can replace dictionaryDecorations, so submit and
+                    // record the same snapshot rather than reading the field twice.
+                    val submitted = dictionaryDecorations.toList()
+                    navigator?.applyDecorations(submitted, group = "dictionary")
+                    appliedDictionaryDecorations = submitted
                 }
                 // The boxes are hidden by the pending class until this sizes them,
                 // so every extra millisecond here is a visible gap on a tap. Readium
