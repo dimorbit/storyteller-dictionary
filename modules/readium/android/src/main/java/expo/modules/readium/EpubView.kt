@@ -1615,7 +1615,11 @@ window.storytellerClampDictionary();
                     onMiddleTouch(mapOf())
                     return true
                 }
-                if (menuVisible) {
+                // A swipe restores the React menu (selectionMenuVisible) without setting
+                // the native flag: it clears isSelecting/menuVisible but Epub.tsx puts its
+                // own menu back. Check both so a tap on an unmarked edge dismisses that
+                // menu instead of falling through to page navigation.
+                if (menuVisible || props?.selectionMenuVisible == true) {
                     onSelection(mapOf("cleared" to true))
                     setActiveDictionaryDecoration(null)
                     // The tap only closes the menu. Letting it through turns the page and
@@ -2655,22 +2659,28 @@ window.storytellerClampDictionary();
         // the one to hide. Comparing quote text instead would hide every copy of a word
         // that happens to appear in a saved sentence; one word in this chapter has seven
         // occurrences, and six of them are nowhere near that sentence.
-        val spanById = occurrences.associateBy { "dictionary:${it.uuid}#${it.index}" }
-        fun coveredByLongerMark(id: String): Boolean {
-            val span = spanById[id] ?: return false
-            val length = span.spanEnd - span.spanStart
-            return occurrences.any { other ->
-                val otherId = "dictionary:${other.uuid}#${other.index}"
-                if (otherId == id) return@any false
-                if (span.spanStart < other.spanStart || span.spanEnd > other.spanEnd) {
-                    return@any false
-                }
-                val otherLength = other.spanEnd - other.spanStart
-                // Equal spans keep one of the two by id, so a quote saved twice cannot
-                // draw its row twice.
-                if (otherLength == length) otherId < id else otherLength > length
+        fun idOf(occurrence: DictionaryOccurrence) = "dictionary:${occurrence.uuid}#${occurrence.index}"
+        val spanById = occurrences.associateBy { idOf(it) }
+
+        // A mark is covered when another's span contains it (identical spans are settled
+        // by id, smaller first). Sorted by start, longest first, every covering mark is
+        // seen before the ones it covers, so one pass finds them all. The old per-mark
+        // full scan was O(n²): 10,000 disjoint matches cost ~200M id allocations and
+        // comparisons on the main thread while a chapter was entered.
+        val coveredIds = HashSet<String>()
+        var farthestEnd = Int.MIN_VALUE
+        occurrences
+            .sortedWith(
+                compareBy<DictionaryOccurrence> { it.spanStart }
+                    .thenByDescending { it.spanEnd }
+                    .thenBy { idOf(it) }
+            )
+            .forEach { occurrence ->
+                val end = occurrence.spanEnd
+                if (end <= farthestEnd) coveredIds.add(idOf(occurrence))
+                if (end > farthestEnd) farthestEnd = end
             }
-        }
+        fun coveredByLongerMark(id: String) = id in coveredIds
 
         val dedupedFromSearch = fromSearch.filterNot { mark -> coveredByLongerMark(mark.id) }
 
