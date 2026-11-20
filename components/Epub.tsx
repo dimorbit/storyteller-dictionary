@@ -802,6 +802,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
                 menuWashTimer.current = null
               }
               setSelection(null)
+              setActiveHighlight(null)
               setActiveDictionaryEntryUuid(null)
               setWashDecorationId(null)
               if (menuPage.current !== null) menuStash.current.delete(menuPage.current)
