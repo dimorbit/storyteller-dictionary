@@ -433,10 +433,17 @@ window.storytellerClampDictionary = function () {
     var originTop = fr.top - (parseFloat(first.style.top) || 0);
     var template = first.cloneNode(false);
     template.dataset.stlClone = '1';
+    // Read the boxes' own rects here, while pass two is reads only. They are needed
+    // to pair measured lines to boxes by geometry in pass three.
+    var boxRects = boxes.map(function (b) {
+      var br = b.getBoundingClientRect();
+      return { left: br.left, right: br.right, top: br.top, bottom: br.bottom };
+    });
 
     plans.push({
       container: container,
       boxes: boxes,
+      boxRects: boxRects,
       lines: lines,
       item: item,
       lineHeight: lineHeight,
@@ -458,15 +465,30 @@ window.storytellerClampDictionary = function () {
 
       var lines = plan.lines;
       var boxes = plan.boxes;
+      var boxRects = plan.boxRects;
       var originLeft = plan.originLeft;
       var originTop = plan.originTop;
       var lineHeight = plan.lineHeight;
-      var used = 0;
+      var taken = {};
 
       lines.forEach(function (r) {
-        var box = (used < boxes.length) ? boxes[used] : plan.template.cloneNode(false);
-        if (used >= boxes.length) container.appendChild(box);
-        used++;
+        // Readium sorts boxes by top then left, interleaving pages in a spread, while
+        // measured lines are in document order. Pair by rect overlap so a capped
+        // measurement never rewrites an unmeasured later-page box.
+        var box = null;
+        for (var bi = 0; bi < boxes.length; bi++) {
+          if (taken[bi]) continue;
+          var br = boxRects[bi];
+          if (Math.min(br.right, r.right) <= Math.max(br.left, r.left)) continue;
+          if (Math.min(br.bottom, r.bottom) <= Math.max(br.top, r.top)) continue;
+          taken[bi] = true;
+          box = boxes[bi];
+          break;
+        }
+        if (!box) {
+          box = plan.template.cloneNode(false);
+          container.appendChild(box);
+        }
         box.style.display = '';
         // A word rect is the em box. The dot row is drawn at the box bottom, so the
         // box has to be the line box; the em box sits centred inside it.
@@ -485,7 +507,9 @@ window.storytellerClampDictionary = function () {
       // With a capped measurement the untouched boxes already sit on the words past
       // the cap; hiding them would strip their underlines and dictionary tap targets.
       if (!plan.truncated) {
-        for (var b = used; b < boxes.length; b++) boxes[b].style.display = 'none';
+        for (var b = 0; b < boxes.length; b++) {
+          if (!taken[b]) boxes[b].style.display = 'none';
+        }
       }
 
       hideDots(plan.item, container);
