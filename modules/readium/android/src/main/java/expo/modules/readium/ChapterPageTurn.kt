@@ -50,9 +50,15 @@ internal object ChapterPageTurn {
         // while more than one chapter is visible. Count every visible chapter WebView here,
         // including single-page ones: a single-page incoming chapter must still make the
         // count 2, or the outgoing WebView gets turned during the transition.
-        val visible = webViews.filter(::isVisible)
-        if (visible.size != 1) return null
-        val webView = visible[0]
+        //
+        // Readium keeps a page's WebView INVISIBLE until its resource finishes loading. A
+        // transition into such a chapter therefore leaves only the outgoing page visible,
+        // so a visibility-only count turns that outgoing page and suppresses the key press.
+        // Defer to Readium while any page occupying the viewport is still being revealed.
+        val pageViews = webViews.map(::pageView)
+        if (hasLoadingPage(pageViews)) return null
+        if (pageViews.count { it.inViewport && it.shown } != 1) return null
+        val webView = webViews.elementAt(pageViews.indexOfFirst { it.inViewport && it.shown })
 
         val pages = intGetter(webView, "getNumPages") ?: return null
         if (pages <= 1) return null
@@ -92,12 +98,16 @@ internal object ChapterPageTurn {
         }
     }
 
-    private fun isVisible(view: View): Boolean {
-        if (!view.isAttachedToWindow || view.visibility != View.VISIBLE || view.width <= 0) {
-            return false
-        }
+    internal data class PageView(val inViewport: Boolean, val shown: Boolean)
+
+    internal fun hasLoadingPage(pages: List<PageView>): Boolean =
+        pages.any { it.inViewport && !it.shown }
+
+    private fun pageView(view: View): PageView {
+        if (!view.isAttachedToWindow || view.width <= 0) return PageView(false, false)
         val rect = Rect()
-        return view.getGlobalVisibleRect(rect) && rect.width() > 0
+        val inViewport = view.getGlobalVisibleRect(rect) && rect.width() > 0
+        return PageView(inViewport, view.visibility == View.VISIBLE)
     }
 
     private fun intGetter(instance: Any, prefix: String): Int? =
