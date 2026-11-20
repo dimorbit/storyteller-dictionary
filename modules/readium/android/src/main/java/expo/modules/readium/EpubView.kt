@@ -1429,6 +1429,24 @@ window.storytellerClampDictionary();
             pendingJumpLocator = null
             cancelJumpPosition()
         }
+        if (oldProps != null && oldProps.jumpBarBottom > 0.0 && finalProps.jumpBarBottom <= 0.0) {
+            // The jump that showed the bar shifted the page down so the target was not
+            // hidden behind it. Undo that shift when the bar goes away, otherwise the
+            // reader keeps an empty gap where the bar used to be.
+            val shift = oldProps.jumpBarBottom + 2
+            activity?.lifecycleScope?.launch {
+                navigator?.evaluateJavascript(
+                    """
+                    (function () {
+                      var scroller = document.scrollingElement || document.documentElement;
+                      if (!scroller) return;
+                      var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
+                      scroller.scrollTop = Math.min(max, scroller.scrollTop + $shift);
+                    })();
+                    """.trimIndent()
+                )
+            }
+        }
         // Changing the overlay alone must not run navigation or playback follow.
         // A UI visibility change is the same kind of update: the listener reads the flag
         // live, so nothing below needs to run for it.
