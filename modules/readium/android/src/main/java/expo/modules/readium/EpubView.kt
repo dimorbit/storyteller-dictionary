@@ -83,6 +83,7 @@ data class Props(
     var highlights: List<Highlight>?,
     var dictionaryEntries: List<DictionaryEntryDecoration>?,
     var activeDictionaryDecorationId: String?,
+    var activeHighlightDecorationId: String?,
     var bookmarks: List<Locator>?,
     var readaloudColor: Int?,
     var readaloudDecoratorStyle: String?,
@@ -111,6 +112,7 @@ data class FinalizedProps(
     var highlights: List<Highlight>,
     var dictionaryEntries: List<DictionaryEntryDecoration>,
     var activeDictionaryDecorationId: String?,
+    var activeHighlightDecorationId: String?,
     var bookmarks: List<Locator>,
     var readaloudColor: Int,
     var readaloudDecoratorStyle: String,
@@ -572,7 +574,11 @@ window.storytellerClampDictionary();
     // rather than the prop: the prop travels back through JS, so it is still null in the
     // frame where the menu opens.
     private fun publishHasSelection() {
-        ReaderInputState.hasSelection = isSelecting || menuVisible
+        // A saved highlight tap opens JS's SelectionMenu without a native selection or
+        // a dictionary word menu. Mirror JS's activeHighlight into the gate so volume
+        // keys keep adjusting volume while that menu is open.
+        ReaderInputState.hasSelection =
+            isSelecting || menuVisible || props?.activeHighlightDecorationId != null
     }
 
     // Re-used on attach and after a navigator rebuild: a modal can detach the view
@@ -782,6 +788,13 @@ window.storytellerClampDictionary();
     }
 
     fun turnPageForward(animated: Boolean = true) {
+        // Scroll layout has a single horizontal page, so ChapterPageTurn falls back and
+        // Readium's own turns are disabled there (disablePageTurnsWhileScrolling). Route
+        // key presses through the same scroll navigation the edge taps use.
+        if (props?.scrollMode == true) {
+            handleScrollModeEdgeTap(goForward = true)
+            return
+        }
         val host = activity ?: return
         host.lifecycleScope.launch {
             val nav = navigator ?: return@launch
@@ -796,6 +809,10 @@ window.storytellerClampDictionary();
     }
 
     fun turnPageBackward(animated: Boolean = true) {
+        if (props?.scrollMode == true) {
+            handleScrollModeEdgeTap(goForward = false)
+            return
+        }
         val host = activity ?: return
         host.lifecycleScope.launch {
             val nav = navigator ?: return@launch
@@ -942,6 +959,7 @@ window.storytellerClampDictionary();
         highlights = null,
         dictionaryEntries = null,
         activeDictionaryDecorationId = null,
+        activeHighlightDecorationId = null,
         bookmarks = null,
         readaloudColor = null,
         readaloudDecoratorStyle = null,
@@ -1335,6 +1353,7 @@ window.storytellerClampDictionary();
                 dictionaryEntries = pendingProps.dictionaryEntries
                     ?: oldProps?.dictionaryEntries ?: listOf(),
                 activeDictionaryDecorationId = pendingProps.activeDictionaryDecorationId,
+                activeHighlightDecorationId = pendingProps.activeHighlightDecorationId,
                 bookmarks = pendingProps.bookmarks ?: oldProps?.bookmarks ?: listOf(),
                 readaloudColor = pendingProps.readaloudColor
                     ?: oldProps?.readaloudColor ?: 0xffffff00.toInt(),
@@ -1480,6 +1499,10 @@ window.storytellerClampDictionary();
 
         if (finalProps.activeDictionaryDecorationId != oldProps?.activeDictionaryDecorationId) {
             setActiveDictionaryDecoration(finalProps.activeDictionaryDecorationId)
+        }
+
+        if (finalProps.activeHighlightDecorationId != oldProps?.activeHighlightDecorationId) {
+            publishHasSelection()
         }
 
         if (finalProps.bookmarks != oldProps?.bookmarks && finalProps.locator != null) {

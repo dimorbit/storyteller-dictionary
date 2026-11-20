@@ -257,6 +257,8 @@ export type EPUBViewProps = {
     locator: ReadiumLocator
   }[]
   activeDictionaryDecorationId?: string | null | undefined
+  /** Mirrors the open highlight menu so native can gate volume keys while it is shown. */
+  activeHighlightDecorationId?: string | null | undefined
   colorTheme: { foreground: string; background: string }
   fontScale?: number | undefined
   lineHeight?: number | undefined
