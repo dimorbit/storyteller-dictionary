@@ -388,6 +388,17 @@ window.storytellerClampDictionary = function () {
       return;
     }
 
+    var probe = (range.startContainer.nodeType === 1)
+      ? range.startContainer : range.startContainer.parentElement;
+    var cs = probe ? getComputedStyle(probe) : null;
+    // In vertical writing Readium already emits one box per column and the stylesheet
+    // paints the strip along the block axis. The word-by-word clamp below groups by
+    // `top`, which fuses columns sharing a top into one wide box and loses a strip.
+    if (cs && /^(vertical|sideways)-/.test(cs.writingMode || '')) {
+      plans.push({ container: container, revealOnly: true });
+      return;
+    }
+
     var lines = lineRects(range, 600);
     stats.items++;
     stats.layouts++;
@@ -397,9 +408,6 @@ window.storytellerClampDictionary = function () {
       return;
     }
 
-    var probe = (range.startContainer.nodeType === 1)
-      ? range.startContainer : range.startContainer.parentElement;
-    var cs = probe ? getComputedStyle(probe) : null;
     var lineHeight = cs ? parseFloat(cs.lineHeight) : NaN;
     if (!isFinite(lineHeight) || lineHeight <= 0) {
       lineHeight = cs ? parseFloat(cs.fontSize) * 1.2 : 0;
@@ -609,6 +617,7 @@ window.storytellerClampDictionary();
             swipeStartX = event.x
             swipeStartY = event.y
             swipeSelectionCleared = false
+            swipeClearedTextSelection = false
         } else if (event.actionMasked == MotionEvent.ACTION_MOVE && !swipeSelectionCleared) {
             // A horizontal drag is a page turn, not a selection drag. Readium's pager
             // refuses to start one while a selection is live (`!isSelecting` in
@@ -629,6 +638,7 @@ window.storytellerClampDictionary();
                 props?.activeDictionaryDecorationId != null
             if (menuOpen && dx > SWIPE_TO_CLEAR_SELECTION_SLOP && dx > dy * 2) {
                 swipeSelectionCleared = true
+                swipeClearedTextSelection = isSelecting
                 swipeSelectionClearDeadline =
                     SystemClock.elapsedRealtime() + SWIPE_SELECTION_CLEAR_DEADLINE_MS
                 // The turn this swipe is about to cause belongs to a new generation. A
@@ -699,10 +709,22 @@ window.storytellerClampDictionary();
                         swipeSelectionCleared = false
                         // No turn happened, so the reader is still on this page: the menu
                         // goes back. "restore" tells JS this was not a dismissal.
+                        if (swipeClearedTextSelection) {
+                            // The swipe cleared both the native gate and Readium's WebView
+                            // drag lock. Restore them too: otherwise JS puts the plain
+                            // selection menu back while hasSelection stays false and the
+                            // enabled volume keys turn pages underneath it.
+                            isSelecting = true
+                            activity?.lifecycleScope?.launch {
+                                navigator?.evaluateJavascript(
+                                    "storyteller.acquireSelectionDragLock && storyteller.acquireSelectionDragLock();"
+                                )
+                            }
+                        }
                         if (activeDictionaryId != null) {
                             menuVisible = true
-                            publishHasSelection()
                         }
+                        publishHasSelection()
                         onSelection(mapOf("restore" to true))
                     }
                     // Cleared here too when no turn arrived; onPageChanged clears it when
@@ -812,6 +834,10 @@ window.storytellerClampDictionary();
     private var swipeStartX: Float = 0f
     private var swipeStartY: Float = 0f
     private var swipeSelectionCleared: Boolean = false
+    // A swipe can clear a dictionary menu or a live native text selection. The restore
+    // path only knows about the menu through activeDictionaryId, so remember which was
+    // cleared and put the same ownership back when the swipe turns no page.
+    private var swipeClearedTextSelection: Boolean = false
     private var swipeSelectionClearDeadline: Long = 0L
     // Set when the page turns after a swipe began. A collapse report arriving later than
     // the swipe's own deadline is then recognised as that swipe's tail rather than a
@@ -3179,6 +3205,14 @@ window.storytellerClampDictionary();
                     if (typeof Android === 'undefined' || !Android.onSelectionEnd) return 'no-interface';
                     Android.onSelectionEnd();
                     return 'released';
+                };
+                // Symmetric to releaseSelectionDragLock, for an abandoned swipe that
+                // restores a still-live text selection: Readium's pager must keep
+                // refusing drags while its menu is back on screen.
+                storyteller.acquireSelectionDragLock = function() {
+                    if (typeof Android === 'undefined' || !Android.onSelectionStart) return 'no-interface';
+                    Android.onSelectionStart();
+                    return 'acquired';
                 };
 
                 document.addEventListener('selectionchange', () => {

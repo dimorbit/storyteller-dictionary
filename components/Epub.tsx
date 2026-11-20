@@ -189,6 +189,29 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   // reader has painted, so no menu can exist yet. A made-up placeholder key was worse
   // than nothing — it could match a later page and restore a stash on the wrong one.
 
+  // A stash is keyed only by `href|pageIndex`. Changing any setting that reflows text
+  // moves a saved word to a different page number, so a snapshot left under the old
+  // key would restore its menu on a page the word no longer occupies. Drop every
+  // snapshot when pagination inputs change; the first render has nothing to drop.
+  const paginationKey = [
+    preferences?.typography?.scale,
+    preferences?.typography?.lineHeight,
+    preferences?.typography?.alignment,
+    preferences?.typography?.fontFamily,
+    preferences?.layout.marginLeft,
+    preferences?.layout.marginRight,
+    preferences?.layout.scroll,
+    customFonts?.map((font) => font.filename).join(","),
+  ].join("|")
+  const paginationReady = useRef(false)
+  useEffect(() => {
+    if (!paginationReady.current) {
+      paginationReady.current = true
+      return
+    }
+    menuStash.current.clear()
+  }, [paginationKey])
+
   const dictionaryEntriesByKey = useMemo(() => {
     const byKey = new Map<string, DictionaryEntry>()
     for (const entry of dictionaryEntries ?? []) {
