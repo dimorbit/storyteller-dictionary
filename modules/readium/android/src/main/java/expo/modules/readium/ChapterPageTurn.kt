@@ -55,16 +55,27 @@ internal object ChapterPageTurn {
             return null
         }
 
+        // R8 inlines setCurrentItem(int, boolean) into its callers, so in a release APK
+        // that name is gone. The retained internal setter is (index, velocity, animated)
+        // and drives the same native Scroller.
+        val intType = Int::class.javaPrimitiveType
+        val boolType = Boolean::class.javaPrimitiveType
         val setter = methods(webView).firstOrNull { m ->
             m.name == "setCurrentItem" &&
-                m.parameterTypes.size == 2 &&
-                m.parameterTypes[0] == Int::class.javaPrimitiveType &&
-                m.parameterTypes[1] == Boolean::class.javaPrimitiveType
+                m.parameterTypes.contentEquals(arrayOf(intType, boolType))
+        } ?: methods(webView).firstOrNull { m ->
+            m.returnType == Void.TYPE &&
+                m.declaringClass.name == "org.readium.r2.navigator.R2WebView" &&
+                m.parameterTypes.contentEquals(arrayOf(intType, intType, boolType))
         } ?: return null
 
         return try {
             setter.isAccessible = true
-            setter.invoke(webView, target, animated)
+            if (setter.parameterTypes.size == 2) {
+                setter.invoke(webView, target, animated)
+            } else {
+                setter.invoke(webView, target, 0, animated)
+            }
             true
         } catch (_: Throwable) {
             null
