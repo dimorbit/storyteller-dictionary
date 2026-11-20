@@ -123,9 +123,22 @@ startAppListening({
         .unwrap()
     }
 
+    // Temporary seek tracing. Remove once the playing-seek bug is closed.
+    console.log(
+      `RAX nav action=${action.type} href=${locator.href} frags=${JSON.stringify(locator.locations.fragments)} prog=${locator.locations.progression}`,
+    )
+
     const clip = await getClip(book, format, locator, positions)
 
-    if (!clip) return
+    if (!clip) {
+      console.log(
+      `RAX nav getClip=null action=${action.type} fmt=${format}`)
+      return
+    }
+
+    console.log(
+      `RAX nav clip=${clip.relativeUrl} start=${clip.start} end=${clip.end}`,
+    )
 
     listenerApi.dispatch(
       bookshelfSlice.actions.jumpTargetResolved({
@@ -140,9 +153,13 @@ startAppListening({
     )
 
     if (action.type === bookDoubleTapped.type) {
+      console.log(
+      `RAX nav seek(play) ${clip.relativeUrl} @${clip.start + 0.01}`)
       await Storyteller.seekTo(clip.relativeUrl, clip.start + 0.01, true)
       await Storyteller.play(false)
     } else {
+      console.log(
+      `RAX nav seek ${clip.relativeUrl} @${clip.start}`)
       await Storyteller.seekTo(clip.relativeUrl, clip.start, true)
     }
   },
@@ -166,18 +183,30 @@ const playerCommands = createLatestWinsQueue()
 startAppListening({
   matcher: matchPlayerPositionUpdate,
   effect: async (action, listenerApi) => {
+    // Temporary seek tracing. Remove once the playing-seek bug is closed.
+    console.log(
+      `RAX player action=${action.type} payload=${JSON.stringify(action.payload)}`)
     if (playerTotalPositionSeeked.match(action)) {
       const target = trackPositionFromTotal(
         getTracks(listenerApi.getState()),
         action.payload.progress,
       )
-      if (!target) return
+      if (!target) {
+        console.log(
+      `RAX skip total: no target for ${action.payload.progress}`)
+        return
+      }
+      console.log(
+      `RAX seekTo(total) ${target.track.relativeUri} @${target.position}`,
+      )
       await playerCommands.enqueue(
         () => Storyteller.seekTo(target.track.relativeUri, target.position),
         { replaceable: true },
       )
     } else if (playerPositionSeeked.match(action)) {
       const { progress } = action.payload
+      console.log(
+      `RAX skip(progress) ${progress}`)
       await playerCommands.enqueue(() => Storyteller.skip(progress), {
         replaceable: true,
       })

@@ -3,7 +3,7 @@ import deepmerge from "deepmerge"
 import { dequal } from "dequal"
 import { Link } from "expo-router"
 import { useMemo } from "react"
-import { Pressable, StyleSheet, View } from "react-native"
+import { Platform, Pressable, StyleSheet, View } from "react-native"
 
 import { Switch } from "@/components/ui/switch"
 import {
@@ -242,6 +242,48 @@ export function ReadingSettings({ bookUuid }: Props) {
           }
         />
       </View>
+      {/* Android only: iOS has no volume keys to bind. Gated natively on the reader UI
+          being hidden, so with the toolbar up the buttons still change the volume. */}
+      {Platform.OS === "android" && (
+        <View className="my-3 w-full flex-row items-center gap-10">
+          <View className="flex-1 gap-1">
+            <Text className="text-lg">Volume buttons turn pages</Text>
+            <Text className="text-muted-foreground text-sm">
+              Only while the reader UI is hidden. With it open they change the volume
+              as usual.
+            </Text>
+          </View>
+          <Switch
+            checked={preferences.volumeKeysTurnPages}
+            onCheckedChange={(value) =>
+              updateGlobalPreference({
+                name: "volumeKeysTurnPages",
+                value,
+              })
+            }
+          />
+        </View>
+      )}
+      {/* Only meaningful once the buttons turn pages at all. */}
+      {Platform.OS === "android" && preferences.volumeKeysTurnPages && (
+        <View className="my-3 w-full flex-row items-center gap-10">
+          <View className="flex-1 gap-1">
+            <Text className="text-lg">Invert volume buttons</Text>
+            <Text className="text-muted-foreground text-sm">
+              Volume up is back by default. Turn this on to make volume up go forward.
+            </Text>
+          </View>
+          <Switch
+            checked={preferences.invertVolumeKeys}
+            onCheckedChange={(value) =>
+              updateGlobalPreference({
+                name: "invertVolumeKeys",
+                value,
+              })
+            }
+          />
+        </View>
+      )}
       <Text variant="h2" className="mt-4">
         Margins
       </Text>

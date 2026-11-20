@@ -5,7 +5,6 @@ import { useEffect } from "react"
 import { Epub } from "@/components/Epub"
 import { LoadingView } from "@/components/LoadingView"
 import { useSpansFold } from "@/lib/pose"
-import { useIsNotBackground } from "@/hooks/useIsNotBackground"
 import { useAppDispatch, useAppSelector } from "@/store/appState"
 import { useGetBookQuery } from "@/store/localApi"
 import { bookshelfSlice } from "@/store/slices/bookshelfSlice"
@@ -28,12 +27,24 @@ export default function BookScreen() {
     segments.includes("navigation-menu") ||
     segments.includes("speed-menu") ||
     segments.includes("reading-settings") ||
-    segments.includes("footnote")
-  const isNotBackground = useIsNotBackground()
+    segments.includes("footnote") ||
+    // Define opens a modal WebView over the reader. It has to count as a sheet of
+    // this screen, or the reader behind it is released: coming back then re-opened
+    // the book, which is the reload and the late dots. It is the same kind of brief
+    // overlay as the sheets above, so it belongs in the same list.
+    segments.includes("dictionary-search")
 
   const isAudioLoading = useAppSelector(
     (state) => state.bookshelf.isAudioLoading,
   )
+
+  // The reader is deliberately NOT released when the app goes to the background.
+  // Unmounting it tore down the whole Readium view, so coming back re-opened the
+  // book: that is the reload, the flash of a stale page before the right one, and
+  // the dictionary dots arriving a moment late. A screen-off or the definition
+  // browser is a brief absence and the reader is idle while hidden, so there is
+  // nothing to release for it. Only leaving this screen releases the view.
+  //
   // `useSegments` is computed during render. The local focus hook mirrored
   // focus into state from a post-commit effect, so on close the render that
   // dropped the sheet still saw `isFocused` false and the reader was rebuilt.
@@ -41,11 +52,7 @@ export default function BookScreen() {
   // agree and the reader survives the close. Its own sheets keep it mounted;
   // any other screen that covers the reader releases it.
   const showEpub =
-    !!book &&
-    !!locator &&
-    (isFocused || isReaderSheetOpen) &&
-    isNotBackground &&
-    !isAudioLoading
+    !!book && !!locator && (isFocused || isReaderSheetOpen) && !isAudioLoading
 
   useEffect(() => {
     dispatch(bookshelfSlice.actions.bookOpened({ bookUuid: uuid, format }))

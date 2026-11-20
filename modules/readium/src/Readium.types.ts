@@ -286,6 +286,33 @@ export type EPUBViewProps = {
   ) => void
   onLocatorChange?: (event: NativeSyntheticEvent<ReadiumLocator>) => void
   onMiddleTouch?: (event: NativeSyntheticEvent<void>) => void
+  /**
+   * When true, a tap anywhere only dismisses the reader UI and never reaches the book:
+   * no page turn, no dictionary menu. A swipe still turns the page, and also dismisses
+   * the UI as it starts.
+   */
+  readerUiVisible?: boolean | undefined
+  /**
+   * Fires when the page actually changes, not on every recompute. Used to hide a
+   * dictionary menu that belongs to a page the reader has left.
+   */
+  onPageTurned?: (
+    event: NativeSyntheticEvent<{
+      pageIndex: number
+      href: string
+      /** False when Readium only recomputed the current page. */
+      turned: boolean
+    }>,
+  ) => void
+  /**
+   * Turn the page with the volume buttons, but only while the reader UI is hidden;
+   * with the UI up they keep changing the volume. Android only.
+   */
+  volumeKeysTurnPages?: boolean | undefined
+  /**
+   * Swap which volume button goes forward.
+   */
+  invertVolumeKeys?: boolean | undefined
   onSelection?: (
     event: NativeSyntheticEvent<
       | {

@@ -69,6 +69,12 @@ type Props = {
 const forwardNavKeyCodes = [93, 117]
 const backwardNavKeyCodes = [92]
 
+// Volume up back, volume down forward, the way Tachiyomi and most e-readers do it. The
+// setting can swap them; the native side only decides *whether* a press turns the page,
+// so the direction is chosen here.
+const volumeUpKeyCode = 24
+const volumeDownKeyCode = 25
+
 const barRowHeight = 52
 const navigationReturnHeight = 40 // NavigationReturnControl's h-10
 
@@ -128,6 +134,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     [globalPreferences, bookPreferences],
   )
   const hideStatusbar = preferences?.hideStatusbar
+  const invertVolumeKeys = preferences?.invertVolumeKeys ?? false
 
   const { data: highlights } = useGetBookHighlightsQuery({
     bookUuid: book.uuid,
@@ -152,6 +159,30 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     selectedText?: string
   } | null>(null)
   const [toolbarHeight, setToolbarHeight] = useState(0)
+
+  // A dictionary menu belongs to the page it was opened on. Turning the page hides it,
+  // and coming back brings it back, so the stash is keyed by page rather than kept in a
+  // single slot: a second menu opened on another page must not evict the first.
+  // Held in a ref alongside state because the restore decision runs inside an effect
+  // that must see the newest stash without re-subscribing.
+  type MenuSnapshot = {
+    x: number
+    y: number
+    yBottom?: number
+    locator: ReadiumLocator
+    selectedText?: string
+    activeDictionaryEntryUuid: UUID | null
+    washDecorationId: string | null
+    activeHighlight: UUID | null
+  }
+  const menuStash = useRef(new Map<string, MenuSnapshot>())
+  // The page the open menu belongs to, so the effect below can tell a turn away from
+  // the recompute events Readium also emits.
+  const menuPage = useRef<string | null>(null)
+  const currentPage = useRef<string | null>(null)
+  // Left null until the first native page report: nothing can be selected before the
+  // reader has painted, so no menu can exist yet. A made-up placeholder key was worse
+  // than nothing — it could match a later page and restore a stash on the wrong one.
 
   const dictionaryEntriesByKey = useMemo(() => {
     const byKey = new Map<string, DictionaryEntry>()
@@ -242,8 +273,97 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     setActiveHighlight(null)
     setActiveDictionaryEntryUuid(null)
     setWashDecorationId(null)
+    menuPage.current = null
     clearNativeSelection()
   }, [clearNativeSelection])
+
+  // Hides the menu without dismissing it, so a page turn can take it away and bring it
+  // back. The snapshot is stashed under the page the menu belongs to, and the wash is
+  // left alone — it is what keeps the mark highlighted while the page slides.
+  const hideMenu = useCallback(() => {
+    // Stashed before the state is cleared, outside any state updater: an updater may
+    // run more than once, and writing the stash from inside it would store the
+    // snapshot twice.
+    if (selection && menuPage.current !== null) {
+      menuStash.current.set(menuPage.current, {
+        ...selection,
+        activeDictionaryEntryUuid,
+        washDecorationId,
+        activeHighlight,
+      })
+    }
+    setSelection(null)
+    setActiveHighlight(null)
+    setActiveDictionaryEntryUuid(null)
+    // The wash is left alone here, and the page turn that calls this no longer clears
+    // it either. It belongs to the mark's own page, so a wash with no visible menu is
+    // harmless — the render guard hides the menu — whereas clearing it is what lost the
+    // highlight when pages were switched quickly. Only an explicit dismissal clears it.
+    // menuPage is deliberately left set: the turn that follows reads it to know which
+    // page the menu belonged to, and the clear and the turn can arrive in either order.
+  }, [selection, activeDictionaryEntryUuid, activeHighlight, washDecorationId])
+
+  const restoreMenu = useCallback((snapshot: MenuSnapshot, page: string) => {
+    // A deleted entry must not be resurrected by a page turn.
+    if (
+      snapshot.activeDictionaryEntryUuid &&
+      !dictionaryEntries?.some(
+        (entry) => entry.uuid === snapshot.activeDictionaryEntryUuid,
+      )
+    ) {
+      return
+    }
+    setSelection({
+      x: snapshot.x,
+      y: snapshot.y,
+      ...(snapshot.yBottom !== undefined && { yBottom: snapshot.yBottom }),
+      locator: snapshot.locator,
+      ...(snapshot.selectedText !== undefined && {
+        selectedText: snapshot.selectedText,
+      }),
+    })
+    setActiveHighlight(snapshot.activeHighlight)
+    setActiveDictionaryEntryUuid(snapshot.activeDictionaryEntryUuid)
+    // Re-applied rather than assumed: the page turn clears the wash natively, so the
+    // mark has to be asked for again on the page it came from.
+    setWashDecorationId(snapshot.washDecorationId)
+    // Pinned to the page the snapshot was stored for, not to whatever page the reader is
+    // on now: a recompute can move currentPage between the stash and the restore, and the
+    // menu would then belong to the wrong page.
+    menuPage.current = page
+  }, [dictionaryEntries])
+
+  const handlePageTurned = useCallback(
+    (pageKey: string, turned: boolean) => {
+      const previousPage = currentPage.current
+      currentPage.current = pageKey
+      // Only a real turn moves the menu off its page. Readium recomputes the current
+      // page on other occasions too, and hiding on those would close the menu the
+      // reader just opened.
+      if (!turned) return
+      if (selection && menuPage.current !== null && menuPage.current !== pageKey) {
+        hideMenu()
+        return
+      }
+      // Restore only when this page was actually arrived at from a different one. A
+      // swipe that hid the menu and then ended on the same page leaves a stash behind,
+      // and restoring it here is the menu popping back up on its own; the abandoned-swipe
+      // timer decides that case instead.
+      if (previousPage === null || previousPage === pageKey) return
+      const stashed = menuStash.current.get(pageKey)
+      if (stashed) {
+        // Not removed: arriving back on this page restores the menu, and leaving it
+        // again must find the same snapshot. The entry is replaced only when a new menu
+        // is opened on that page.
+        restoreMenu(stashed, pageKey)
+      }
+      // The wash is never cleared here. It belongs to the page its mark is on, and the
+      // render guard hides the menu when that page is not the current one — so a wash
+      // with no menu is harmless, while clearing it on a turn is what lost the highlight
+      // during fast switching. It goes only on an explicit dismissal.
+    },
+    [hideMenu, restoreMenu, selection],
+  )
 
   const isPlaying = useAppSelector(getIsPlaying)
   const returnPosition = useAppSelector((state) =>
@@ -274,6 +394,15 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     (state) => state.bookshelf.footnoteContent !== null,
   )
 
+  // A menu only belongs on the page it was opened on. Without this the menu was drawn
+  // whenever `selection` was set, so any event that restored it while the reader had
+  // moved on put it on the wrong page — the intermittent bug. The page is read through a
+  // ref, so this is evaluated on each render against the page the reader is actually on.
+  const menuBelongsToCurrentPage =
+    selection !== null &&
+    (menuPage.current === null || menuPage.current === currentPage.current)
+  const showSelectionMenu = ENABLE_SELECTION_UI && menuBelongsToCurrentPage
+
   const router = useRouter()
 
   useEffect(() => {
@@ -284,12 +413,26 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           epubViewRef.current?.goForward()
         } else if (backwardNavKeyCodes.includes(event.keyCode)) {
           epubViewRef.current?.goBackward()
+        } else if (
+          event.keyCode === volumeUpKeyCode ||
+          event.keyCode === volumeDownKeyCode
+        ) {
+          // Native has already decided this press turns a page, so the only question
+          // left is which way. Swapping is a setting, so it is read at press time
+          // rather than baked into the listener.
+          const baseIsForward = event.keyCode === volumeDownKeyCode
+          const forward = invertVolumeKeys ? !baseIsForward : baseIsForward
+          if (forward) {
+            epubViewRef.current?.goForward()
+          } else {
+            epubViewRef.current?.goBackward()
+          }
         }
       },
     )
 
     return () => listener.remove()
-  }, [])
+  }, [invertVolumeKeys])
 
   if (isLoadingPreferences || isPreferencesUninitialized) {
     return (
@@ -383,7 +526,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             though: the top toolbar (or, with it hidden, empty padding) took a
             tap there and the selection never closed. While a selection is
             open, a tap anywhere above the page closes it instead. */}
-        {ENABLE_SELECTION_UI && selection && selectionDismissTop > 0 && (
+        {showSelectionMenu && selectionDismissTop > 0 && (
           <Pressable
             accessibilityLabel="Close selection menu"
             accessibilityRole="button"
@@ -392,7 +535,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             onPress={closeSelection}
           />
         )}
-        {ENABLE_SELECTION_UI && selection && (
+        {showSelectionMenu && (
           <SelectionMenu
             bookUuid={book.uuid}
             x={selection.x + insets.left}
@@ -458,6 +601,12 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           readaloudColor={preferences?.readaloudColor}
           readaloudDecoratorStyle={preferences?.readaloudDecoratorStyle}
           scrollMode={preferences?.layout.scroll ?? false}
+          // While the UI is on screen a tap only dismisses it; without this a tap in
+          // the side zones turned the page instead, so the chrome stayed up and the
+          // page moved behind it.
+          readerUiVisible={preferences?.showReaderUi ?? false}
+          volumeKeysTurnPages={preferences?.volumeKeysTurnPages ?? false}
+          invertVolumeKeys={invertVolumeKeys}
           colorTheme={{ foreground, background }}
           customFonts={customFonts?.map((font) => ({
             ...font,
@@ -500,6 +649,13 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             )
           }}
           onMiddleTouch={() => {
+            // A visible UI is dismissed first, whatever else is on screen. Taps while
+            // the UI is up exist only to hide it, so a live selection must not swallow
+            // that tap and leave the reader stuck with the chrome showing.
+            if (preferences?.showReaderUi) {
+              updateGlobalPreference({ name: "showReaderUi", value: false })
+              return
+            }
             // A tap that ends a selection only ends it; it must not also show
             // or hide the reader UI under the menu.
             if (selection) {
@@ -522,15 +678,66 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           }}
           onSelection={(event) => {
             if (!ENABLE_SELECTION_UI) return
-            if ("cleared" in event.nativeEvent) {
+            if ("restore" in event.nativeEvent) {
+              // The swipe never turned a page, so the reader is still looking at this
+              // text and the menu goes back where it was. The snapshot is kept: a later
+              // swipe away from this page has to find it again, and dropping it here is
+              // what made the menu vanish for good after one failed swipe.
+              const stashed = menuPage.current
+                ? menuStash.current.get(menuPage.current)
+                : undefined
+              if (stashed && menuPage.current) {
+                restoreMenu(stashed, menuPage.current)
+              }
+            } else if ("swiping" in event.nativeEvent) {
+              // Hidden, but kept: the swipe may be abandoned, in which case it comes
+              // back. hideMenu stashes it under the page it belongs to for that reason.
+              //
+              // The native side emits this from the touch handler, so the work here is
+              // kept to a single state write: every extra setState is a frame of the menu
+              // still being on screen after the finger has moved.
+              if (selection) {
+                // Keyed by the page the reader is on right now, not by menuPage, which can
+                // be left over from an earlier restore or a recompute that moved it. A
+                // stale key is what put the menu on the wrong page.
+                const key = currentPage.current
+                if (key !== null) {
+                  menuPage.current = key
+                  menuStash.current.set(key, {
+                    ...selection,
+                    activeDictionaryEntryUuid,
+                    washDecorationId,
+                    activeHighlight,
+                  })
+                }
+              }
+              setSelection(null)
+              setActiveHighlight(null)
+              setActiveDictionaryEntryUuid(null)
+              // The wash is deliberately NOT cleared here. It is a class on the mark's box
+              // inside the page, so it travels with the text while the page slides, which
+              // is the blue highlight during the animation. Nulling the prop cleared it
+              // natively and it blinked out the moment the swipe began. It is cleared when
+              // the gesture ends, or put back from the stash if the swipe is abandoned.
+            } else if ("cleared" in event.nativeEvent) {
+              // A tab on the reader rather than a page turn: the stash must not hold
+              // it, or coming back to this page would reopen a menu the reader closed.
               setSelection(null)
               setActiveDictionaryEntryUuid(null)
               setWashDecorationId(null)
+              menuPage.current = null
             } else {
+              // Selecting something on another page replaces whatever was stashed
+              // there. A menu belongs to the text it was opened on, so the old one must
+              // not come back when this page is revisited.
+              menuStash.current.clear()
               setSelection(event.nativeEvent)
               setActiveDictionaryEntryUuid(
                 savedWordUuidForText(event.nativeEvent.locator.text?.highlight),
               )
+              // Remember which page this menu belongs to, so a turn can hide it and a
+              // turn back can restore it.
+              menuPage.current = currentPage.current
             }
           }}
           onDictionaryTap={(event) => {
@@ -542,11 +749,21 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             setActiveHighlight(null)
             setActiveDictionaryEntryUuid(entry.uuid)
             setWashDecorationId(event.nativeEvent.decorationId)
+            // Tapping a different word is a new menu, so anything stashed from a word
+            // opened earlier is dropped rather than resurfacing later.
+            menuStash.current.clear()
             setSelection({
               x: event.nativeEvent.x,
               y: event.nativeEvent.y,
               locator: event.nativeEvent.locator,
             })
+            menuPage.current = currentPage.current
+          }}
+          onPageTurned={(event) => {
+            handlePageTurned(
+              `${event.nativeEvent.href}|${event.nativeEvent.pageIndex}`,
+              event.nativeEvent.turned,
+            )
           }}
           onShowFootnote={(event) => {
             dispatch(

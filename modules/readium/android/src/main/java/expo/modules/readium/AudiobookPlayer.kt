@@ -1343,15 +1343,34 @@ class AudiobookPlayer(
     fun seekTo(relativeUri: String, position: Double, skipEmit: Boolean?) {
         val player = controller ?: return
         val currentTrack = getCurrentTrack()
+        val reqMs = (position * 1000).roundToLong()
+        Log.i(
+            READALOUD_LOG_TAG,
+            "seekTo<- uri=$relativeUri pos=$position reqMs=$reqMs curMs=${player.currentPosition} " +
+                "idxBefore=${player.currentMediaItemIndex} isPlaying=${player.isPlaying} " +
+                "state=${player.playbackState} connected=${player.isConnected} " +
+                "seekCmd=${player.isCommandAvailable(Player.COMMAND_SEEK_TO_MEDIA_ITEM)} " +
+                "items=${player.mediaItemCount}"
+        )
         val index = relativeUriToIndex[audioResourceKey(relativeUri)] ?: run {
             Log.w(READALOUD_LOG_TAG, "seekTo: no track for $relativeUri")
             return
         }
-        player.seekTo(index, (position * 1000).roundToLong())
+        val wasCurrentTrack = currentTrack != null &&
+            audioResourceKey(currentTrack.relativeUri) == audioResourceKey(relativeUri)
+        Log.i(READALOUD_LOG_TAG, "seekTo resolved index=$index wasCurrentTrack=$wasCurrentTrack")
+        player.seekTo(index, reqMs)
 
-        if (currentTrack != null && audioResourceKey(currentTrack.relativeUri) == audioResourceKey(relativeUri)) {
+        if (wasCurrentTrack) {
             onPositionChanged(position)
         }
+
+        Log.i(
+            READALOUD_LOG_TAG,
+            "seekTo-> afterMs=${player.currentPosition} idxAfter=${player.currentMediaItemIndex} " +
+                "state=${player.playbackState} isPlaying=${player.isPlaying} " +
+                "delta=${player.currentPosition - reqMs}"
+        )
 
         if (!(skipEmit ?: false)) {
             emitClipChange(relativeUri, position)
@@ -1360,13 +1379,29 @@ class AudiobookPlayer(
 
     fun skip(position: Double) {
         val player = controller ?: return
-        player.seekTo((position * 1000).roundToLong())
+        val reqMs = (position * 1000).roundToLong()
+        Log.i(
+            READALOUD_LOG_TAG,
+            "skip<- pos=$position reqMs=$reqMs curMs=${player.currentPosition} " +
+                "idx=${player.currentMediaItemIndex} isPlaying=${player.isPlaying} " +
+                "state=${player.playbackState} connected=${player.isConnected} " +
+                "seekCmd=${player.isCommandAvailable(Player.COMMAND_SEEK_TO_MEDIA_ITEM)} " +
+                "items=${player.mediaItemCount}"
+        )
+        player.seekTo(reqMs)
 
         // Position events only come from the progress collector while playing.
         // Report the new place now, or a paused seek bar snaps back to the old one.
         onPositionChanged(position)
 
         val currentTrack = getCurrentTrack() ?: return
+
+        Log.i(
+            READALOUD_LOG_TAG,
+            "skip-> afterMs=${player.currentPosition} idxAfter=${player.currentMediaItemIndex} " +
+                "state=${player.playbackState} isPlaying=${player.isPlaying} " +
+                "delta=${player.currentPosition - reqMs} track=${currentTrack.relativeUri}"
+        )
 
         emitClipChange(currentTrack.relativeUri, position)
     }
@@ -1456,6 +1491,13 @@ class AudiobookPlayer(
             "CLIP_CHANGED" -> {
                 if (!controller.isPlaying) return result
 
+                // MediaController is thread-affine. onCustomCommand runs on its
+                // application thread, but the coroutine below does not, so read
+                // the guard's controller values before entering it.
+                val currentTrackIndex = controller.currentMediaItemIndex
+                val currentPosition = controller.currentPosition / 1000.0
+                val playbackSpeed = controller.playbackParameters.speed
+
                 return serviceScope.future {
                     val result = SessionResult(SessionResult.RESULT_SUCCESS)
                     val bookUuid = bookUuid ?: return@future result
@@ -1476,22 +1518,20 @@ class AudiobookPlayer(
                     // stale message from the first clip of a track the controller has
                     // not reported yet; the small lead allows for an early position.
                     val clipTrackIndex = relativeUriToIndex[audioResourceKey(clip.audioResource)]
-                    val currentTrackIndex = controller.currentMediaItemIndex
                     if (clipTrackIndex != null && clipTrackIndex < currentTrackIndex) {
                         Log.d(READALOUD_LOG_TAG, "drop clip ${clip.fragmentId}: track $clipTrackIndex < $currentTrackIndex")
                         return@future result
                     }
                     if (clipTrackIndex == null || clipTrackIndex == currentTrackIndex) {
-                        val position = controller.currentPosition / 1000.0
                         // The tolerance is in media time, but dispatch delay is in wall time.
                         // At 2x-3x speed, 0.25 s of media time is only 80-125 ms of wall time,
                         // so scale it by the playback speed to keep valid clips from being dropped.
-                        val speed = controller.playbackParameters.speed.coerceAtLeast(1f)
+                        val speed = playbackSpeed.coerceAtLeast(1f)
                         val tolerance = 0.25 * speed
-                        if (position < clip.start - tolerance || position >= clip.end + tolerance) {
+                        if (currentPosition < clip.start - tolerance || currentPosition >= clip.end + tolerance) {
                             Log.d(
                                 READALOUD_LOG_TAG,
-                                "drop clip ${clip.fragmentId}: idx=$clipTrackIndex cur=$currentTrackIndex pos=$position window=${clip.start}..${clip.end}"
+                                "drop clip ${clip.fragmentId}: idx=$clipTrackIndex cur=$currentTrackIndex pos=$currentPosition window=${clip.start}..${clip.end}"
                             )
                             return@future result
                         }
