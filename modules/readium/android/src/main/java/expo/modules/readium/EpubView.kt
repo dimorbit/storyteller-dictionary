@@ -3858,8 +3858,9 @@ window.storytellerClampDictionary();
                                 guard.id !== $landingId || guard.input || performance.now() > $deadline) return;
                             scroller.scrollTop = nextTop;
                             // The fallback shift is the only one the bar-dismiss undo may
-                            // reverse. Record it so repeated UI hides cannot move the page again.
-                            guard.appliedShift = $barBottom + 2;
+                            // reverse. Record the shift actually applied: the clamp to 0
+                            // makes it smaller than the bar height near the top of the book.
+                            guard.appliedShift = initialTop - scroller.scrollTop;
                             guard.appliedTop = scroller.scrollTop;
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
