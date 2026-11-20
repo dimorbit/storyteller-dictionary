@@ -638,6 +638,7 @@ window.storytellerClampDictionary();
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             cancelJumpForReaderInput()
+            swipeGestureGeneration++
             swipeStartX = event.x
             swipeStartY = event.y
             swipeSelectionCleared = false
@@ -727,9 +728,10 @@ window.storytellerClampDictionary();
                 // rather than dismissed. The scroll pin was already dropped when the drag
                 // began — holding it to here is what fought the turn.
                 val activityScope = activity?.lifecycleScope
+                val restoreGeneration = swipeGestureGeneration
                 activityScope?.launch {
                     delay(SWIPE_SELECTION_CLEAR_DEADLINE_MS)
-                    if (swipeSelectionCleared) {
+                    if (swipeSelectionCleared && restoreGeneration == swipeGestureGeneration) {
                         swipeSelectionCleared = false
                         // No turn happened, so the reader is still on this page: the menu
                         // goes back. "restore" tells JS this was not a dismissal.
@@ -874,6 +876,10 @@ window.storytellerClampDictionary();
     // cleared and put the same ownership back when the swipe turns no page.
     private var swipeClearedTextSelection: Boolean = false
     private var swipeSelectionClearDeadline: Long = 0L
+    // Each touch-down advances this. A restore timer captured from an earlier gesture must
+    // not fire on a later drag that re-armed swipeSelectionCleared: it would clear that
+    // gesture's flag and reopen the menu mid-drag.
+    private var swipeGestureGeneration: Long = 0L
     // Set when the page turns after a swipe began. A collapse report arriving later than
     // the swipe's own deadline is then recognised as that swipe's tail rather than a
     // fresh dismissal, which is what lost the menu and highlight under fast switching.
