@@ -1,6 +1,5 @@
 package expo.modules.readium
 
-import android.util.Log
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 
 /**
@@ -25,8 +24,6 @@ import org.readium.r2.navigator.epub.EpubNavigatorFragment
  */
 internal object ChapterPageTurn {
 
-    private const val TAG = "StorytellerTurn"
-
     /** True when turned here; null when Readium should handle it. */
     fun forward(navigator: EpubNavigatorFragment, animated: Boolean): Boolean? =
         turn(navigator, delta = 1, animated = animated)
@@ -42,7 +39,6 @@ internal object ChapterPageTurn {
         val current = intGetter(webView, "getMCurItem") ?: return null
         val target = current + delta
         if (target < 0 || target >= pages) {
-            Log.d(TAG, "boundary current=" + current + " pages=" + pages)
             return null
         }
 
@@ -56,7 +52,6 @@ internal object ChapterPageTurn {
         return try {
             setter.isAccessible = true
             setter.invoke(webView, target, animated)
-            Log.d(TAG, "turned current=" + current + " target=" + target + " pages=" + pages)
             true
         } catch (_: Throwable) {
             null

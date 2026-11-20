@@ -1,6 +1,5 @@
 import { type BookWithRelations } from "@/database/books"
 import { type BookAuthor } from "@/legacy/persistence/books"
-import { logger } from "@/logger"
 import { type UUID } from "@/uuid"
 
 import {
@@ -170,33 +169,17 @@ export async function getClip(
 
   try {
     const clip = await ReadiumModule.getClip(book.uuid, locator)
-    // Temporary seek tracing. Remove once the playing-seek bug is closed.
-    console.log(
-      `RAX getClip direct href=${locator.href} clip=${clip ? clip.relativeUrl + "@" + clip.start : "null"}`,
-    )
     return clip
-  } catch (e) {
-    console.log(
-      `RAX getClip direct threw: ${String(e)}`)
+  } catch {
     const readaloudLocator = getReadaloudLocatorFromAudiobook(
       positions,
       locator,
     )
-    if (!readaloudLocator) {
-      console.log(
-      `RAX getClip no readaloudLocator`)
-      return null
-    }
+    if (!readaloudLocator) return null
 
     try {
-      const clip = await ReadiumModule.getClip(book.uuid, readaloudLocator)
-      console.log(
-      `RAX getClip shifted clip=${clip ? clip.relativeUrl + "@" + clip.start : "null"}`,
-      )
-      return clip
-    } catch (e2) {
-      console.log(
-      `RAX getClip shifted threw: ${String(e2)}`)
+      return await ReadiumModule.getClip(book.uuid, readaloudLocator)
+    } catch {
       return null
     }
   }

@@ -1541,7 +1541,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         dictionaryDecorationJob?.cancel()
         dictionaryDecorationJob = null
         decoratedDictionaryHref = null
-        lastDictionaryCount = 0
         lastDictionarySearchHref = null
         dictionaryOccurrences = listOf()
         webViews.clear()
@@ -1702,10 +1701,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
      * dismissing tap never reaches the webview and the selection would otherwise stay.
      */
     fun clearSelection() {
-        // Logged because a selection disappearing on its own has been reported and there
-        // is no way to tell from the outside which caller did it. Remove once that is
-        // settled.
-        Log.d("StorytellerSelection", "clearSelection from ${Throwable().stackTrace.getOrNull(2)?.methodName}")
         val navigator = navigator ?: return
 
         try {
@@ -2194,8 +2189,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // Set just before the search repaints with its result, so the paint that is waiting
     // for a search is told apart from the paint the search itself makes.
     private var resultOfSearch = false
-    // Size of the dictionary group as last applied, for the repaint log.
-    private var lastDictionaryCount = 0
 
     // The readaloud highlight is one decoration that changes on every clip. It is
     // applied through a single worker so a slow, older application cannot land after
@@ -2260,7 +2253,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         val cached = dictionaryOccurrenceCache[key]
         if (cached != null) {
-            Log.d("StorytellerDots", "search cached href=" + href + " marks=" + cached.size)
             dictionaryOccurrences = cached
             decorateDictionaryEntries()
             prefetchDictionaryEntries(href)
@@ -2271,7 +2263,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
         val activity = activity ?: return
         dictionarySearchJob = activity.lifecycleScope.launch {
-            val searchStarted = SystemClock.elapsedRealtime()
             val text = dictionaryTextCache[key]
                 ?: DictionarySearch.extractChapterText(bookUuid, href)?.also {
                     dictionaryTextCache[key] = it
@@ -2286,11 +2277,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
             if (lastDictionarySearchHref == href) {
                 dictionaryOccurrences = occurrences
-                Log.d(
-                    "StorytellerDots",
-                    "search done href=" + href + " marks=" + occurrences.size +
-                        " ms=" + (SystemClock.elapsedRealtime() - searchStarted)
-                )
                 // The paint that carries the search's result must not be held back by
                 // the guard in decorateDictionaryEntries: this job is still running.
                 resultOfSearch = true
@@ -2363,10 +2349,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     )
                     if (version == dictionaryWordsVersion) {
                         dictionaryOccurrenceCache[key] = occurrences
-                        Log.d(
-                            "StorytellerDots",
-                            "prefetched " + neighbour + " marks=" + occurrences.size
-                        )
                     }
                 }
             }
@@ -2644,8 +2626,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         val activity = appContext.currentActivity as? FragmentActivity ?: return
 
         dictionaryDecorationJob = activity.lifecycleScope.launch {
-            val applyStarted = SystemClock.elapsedRealtime()
-
             // A paint with no marks has no boxes to size, and the clamp is the expensive part:
             // it walks the chapter word by word per item. Arriving at a chapter with no saved
             // word in it used to run that whole script over an empty group, twice, while the
@@ -2657,7 +2637,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 if (href != decoratedDictionaryHref) {
                     dictionaryDecorationMutex.withLock {
                         decoratedDictionaryHref = href
-                        lastDictionaryCount = 0
                         navigator?.applyDecorations(emptyList(), group = "dictionary")
                     }
                 }
@@ -2666,12 +2645,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             do {
                 dictionaryDecorationPending = false
                 delay(DICTIONARY_DECORATION_SETTLE_MS)
-                Log.d(
-                    "StorytellerDots",
-                    "apply settle=" + (SystemClock.elapsedRealtime() - applyStarted) +
-                        " marks=" + dictionaryDecorations.size +
-                        " chapterChanged=" + (navigator?.currentLocator?.value?.href != decoratedDictionaryHref)
-                )
                 // Only the writes are inside the lock, and nothing yields within it.
                 //
                 // Readium's own change callback has a coordinate bug: DiffUtil reports a
@@ -2694,7 +2667,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     // from that empty store, which is why the dots vanished entirely.
                     val chapterChanged = href != decoratedDictionaryHref
                     decoratedDictionaryHref = href
-                    lastDictionaryCount = dictionaryDecorations.size
                     if (chapterChanged) {
                         navigator?.applyDecorations(emptyList(), group = "dictionary")
                     }
@@ -2704,31 +2676,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 // so every extra millisecond here is a visible gap on a tap. Readium
                 // only enqueues its script, hence the short settle before measuring.
                 delay(DICTIONARY_DECORATION_GAP_MS)
-                Log.d(
-                    "StorytellerDots",
-                    "apply gap=" + (SystemClock.elapsedRealtime() - applyStarted)
-                )
-                val clampAskedAt = SystemClock.elapsedRealtime()
-                val clamped = withTimeoutOrNull(2000L) {
+                withTimeoutOrNull(2000L) {
                     navigator?.evaluateJavascript(clampDictionaryDecorations)
-                }
-                Log.d(
-                    "StorytellerDots",
-                    "apply roundtrip=" + (SystemClock.elapsedRealtime() - clampAskedAt)
-                )
-                Log.d(
-                    "StorytellerDots",
-                    "apply clamp done=" + (SystemClock.elapsedRealtime() - applyStarted)
-                )
-                // The result is the only evidence of whether the boxes were sized and
-                // revealed. It used to be logged in full, which was unreadable; a count
-                // and the failure reasons are enough to tell a good paint from a broken
-                // one, and knowing which is the difference between a rendering bug and a
-                // decoration that was never applied.
-                if (clamped == null) {
-                    Log.w("StorytellerDots", "dictionary clamp timed out")
-                } else {
-                    Log.d("StorytellerDots", "dictionary clamp: $clamped")
                 }
                 // Readium recreates the boxes from the template on its own body
                 // ResizeObserver, which re-adds the pending class and discards the
@@ -3344,14 +3293,6 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // exactly this reason; and past the deadline a turn since the gesture began means
         // this is a late tail of that same swipe, not a dismissal.
         val withinDeadline = SystemClock.elapsedRealtime() <= swipeSelectionClearDeadline
-        // Logged while this is being diagnosed: a selection vanishing on its own has no
-        // other trace, and the two guards below are exactly what decides whether it is
-        // reported as a dismissal. Remove with the clearSelection log.
-        Log.d(
-            "StorytellerSelection",
-            "cleared report: withinDeadline=$withinDeadline turnSinceSwipe=$sawTurnSinceSwipeStart" +
-                " swiping=$swipeSelectionCleared"
-        )
         if (withinDeadline) return
         if (sawTurnSinceSwipeStart) return
         onSelection(mapOf("cleared" to true))
