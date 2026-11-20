@@ -15,9 +15,28 @@ import android.annotation.SuppressLint
 import android.view.KeyEvent
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.bridge.Arguments
+import expo.modules.readium.ReaderInputState
+
+private const val KEYCODE_VOLUME_UP = 24
+private const val KEYCODE_VOLUME_DOWN = 25
 
 class MainActivity : ReactActivity() {
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    // Volume keys are claimed here, before the window policy sees them, but only while
+    // the setting is on and the reader UI is hidden. Off that condition they fall
+    // through to super and change the volume as usual. Both actions are swallowed:
+    // some devices adjust the volume on the up, others on the down, so consuming only
+    // one still lets the system react on release.
+    if (
+      (event.keyCode == KEYCODE_VOLUME_UP || event.keyCode == KEYCODE_VOLUME_DOWN) &&
+      ReaderInputState.volumeKeysTurnPagesNow
+    ) {
+      if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+        sendKeyEvent(event.keyCode)
+      }
+      return true
+    }
+
     if (event.action == KeyEvent.ACTION_DOWN) {
       if (listOf(92, 93, 117).contains(event.keyCode)) {
         sendKeyEvent(event.keyCode)

@@ -18,7 +18,17 @@ import org.readium.r2.shared.util.resource.content.HtmlResourceContentExtractor
 data class DictionaryWord(val uuid: String, val word: String, val bookUuid: String?)
 
 /** One copy of a saved word in a chapter, numbered within that word. */
-data class DictionaryOccurrence(val uuid: String, val index: Int, val locator: Locator)
+data class DictionaryOccurrence(
+    val uuid: String,
+    val index: Int,
+    val locator: Locator,
+    // Character span of this occurrence in the chapter's plain text, and the length
+    // of that text. Two marks cover the same characters when their spans overlap, so
+    // a word saved alone can be dropped when a saved sentence already covers it.
+    val spanStart: Int = 0,
+    val spanEnd: Int = 0,
+    val textLength: Int = 0,
+)
 
 /**
  * Finds a saved word wherever it appears in a book's text.
@@ -113,6 +123,9 @@ object DictionarySearch {
                         DictionaryOccurrence(
                             uuid = word.uuid,
                             index = index,
+                            spanStart = start,
+                            spanEnd = end,
+                            textLength = text.length,
                             locator = Locator(
                                 href = href,
                                 mediaType = MediaType.XHTML,

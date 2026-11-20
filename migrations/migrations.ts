@@ -7,6 +7,14 @@ import {
   down as showReaderUiDown,
   up as showReaderUiUp,
 } from "./1764206663395_insert_show_reader_ui_preference"
+import {
+  down as volumeKeysTurnPagesDown,
+  up as volumeKeysTurnPagesUp,
+} from "./1794000000000_insert_volume_keys_turn_pages_preference"
+import {
+  down as invertVolumeKeysDown,
+  up as invertVolumeKeysUp,
+} from "./1794000000001_insert_invert_volume_keys_preference"
 import { up as serverCascadeDeleteUp } from "./1766770316988_server_cascade_delete"
 import { up as timestampRealUp } from "./1766772044082_timestamp_real"
 import {
@@ -120,5 +128,13 @@ export const migrations = {
   "1793400000000_dictionary_entries_global": {
     up: dictionaryEntriesGlobalUp,
     down: dictionaryEntriesGlobalDown,
+  },
+  "1794000000000_insert_volume_keys_turn_pages_preference": {
+    up: volumeKeysTurnPagesUp,
+    down: volumeKeysTurnPagesDown,
+  },
+  "1794000000001_insert_invert_volume_keys_preference": {
+    up: invertVolumeKeysUp,
+    down: invertVolumeKeysDown,
   },
 }

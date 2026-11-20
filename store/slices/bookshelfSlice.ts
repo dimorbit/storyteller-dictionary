@@ -11,7 +11,12 @@ import {
   clearReturnPosition,
   miniPlayerSliderChapterPositionChanged,
   navItemPressed,
+  nextTrackPressed,
   playerClipChanged,
+  playerPositionSeeked,
+  playerTotalPositionSeeked,
+  playerTrackChanged,
+  prevTrackPressed,
   returnToPreviousPosition,
   serverPositionUpdated,
 } from "@/store/actions"
@@ -223,6 +228,17 @@ export const bookshelfSlice = createSlice({
         state.jumpHold.target = target
       }
     },
+    jumpHoldExpired(
+      state,
+      action: PayloadAction<{ bookUuid: UUID; timestamp: number }>,
+    ) {
+      if (
+        state.jumpHold?.bookUuid === action.payload.bookUuid &&
+        state.jumpHold.timestamp === action.payload.timestamp
+      ) {
+        state.jumpHold = null
+      }
+    },
     bookDeleted(state, action: PayloadAction<{ bookUuid: UUID }>) {
       const { bookUuid } = action.payload
 
@@ -274,6 +290,9 @@ export const bookshelfSlice = createSlice({
       const { relativeUrl, start } = action.payload.clip
       releaseJumpHoldAt(state, relativeUrl, start)
     })
+    // A place the user chose now replaces the saved-place jump. Player seeks
+    // count too: a held jump makes the reader behave as paused and stops clip
+    // persistence, so a seek that left the hold in place froze the highlight.
     builder.addMatcher(
       isAnyOf(
         bookDoubleTapped,
@@ -281,6 +300,11 @@ export const bookshelfSlice = createSlice({
         navItemPressed,
         returnToPreviousPosition,
         serverPositionUpdated,
+        playerPositionSeeked,
+        playerTotalPositionSeeked,
+        playerTrackChanged,
+        nextTrackPressed,
+        prevTrackPressed,
       ),
       (state) => {
         state.jumpHold = null

@@ -169,19 +169,19 @@ export async function getClip(
 
   try {
     const clip = await ReadiumModule.getClip(book.uuid, locator)
-    return clip
+    // A synced locator with a t=... fragment can resolve to no clip without
+    // throwing. The progression fallback must run for null as well as for an error.
+    if (clip) return clip
   } catch {
-    const readaloudLocator = getReadaloudLocatorFromAudiobook(
-      positions,
-      locator,
-    )
-    if (!readaloudLocator) return null
+    // Fall through to the readaloud-locator fallback.
+  }
+  const readaloudLocator = getReadaloudLocatorFromAudiobook(positions, locator)
+  if (!readaloudLocator) return null
 
-    try {
-      return await ReadiumModule.getClip(book.uuid, readaloudLocator)
-    } catch {
-      return null
-    }
+  try {
+    return await ReadiumModule.getClip(book.uuid, readaloudLocator)
+  } catch {
+    return null
   }
 }
 

@@ -210,7 +210,10 @@ export function MiniPlayer({ book, format, hidden, floatingToolbar }: Props) {
               stop={progressEnd ?? 0}
               progress={progress}
               onProgressChange={
-                bookPrefs?.detailView?.scope === "book"
+                // Text progress over the whole book stays read-only. Audio over
+                // the whole book seeks through playerTotalPositionSeeked.
+                bookPrefs?.detailView?.scope === "book" &&
+                bookPrefs?.detailView?.mode !== "audio"
                   ? undefined
                   : (value) => {
                       if (bookPrefs?.detailView?.mode === "audio") {

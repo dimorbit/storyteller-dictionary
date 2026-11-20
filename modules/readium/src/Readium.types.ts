@@ -257,6 +257,13 @@ export type EPUBViewProps = {
     locator: ReadiumLocator
   }[]
   activeDictionaryDecorationId?: string | null | undefined
+  /** Mirrors the open highlight menu so native can gate volume keys while it is shown. */
+  activeHighlightDecorationId?: string | null | undefined
+  /**
+   * True while the JS selection menu is on screen. A plain selection has no decoration
+   * id, so native needs this to keep volume keys from turning pages under the menu.
+   */
+  selectionMenuVisible?: boolean | undefined
   colorTheme: { foreground: string; background: string }
   fontScale?: number | undefined
   lineHeight?: number | undefined
@@ -286,6 +293,33 @@ export type EPUBViewProps = {
   ) => void
   onLocatorChange?: (event: NativeSyntheticEvent<ReadiumLocator>) => void
   onMiddleTouch?: (event: NativeSyntheticEvent<void>) => void
+  /**
+   * When true, a tap anywhere only dismisses the reader UI and never reaches the book:
+   * no page turn, no dictionary menu. A swipe still turns the page, and also dismisses
+   * the UI as it starts.
+   */
+  readerUiVisible?: boolean | undefined
+  /**
+   * Fires when the page actually changes, not on every recompute. Used to hide a
+   * dictionary menu that belongs to a page the reader has left.
+   */
+  onPageTurned?: (
+    event: NativeSyntheticEvent<{
+      pageIndex: number
+      href: string
+      /** False when Readium only recomputed the current page. */
+      turned: boolean
+    }>,
+  ) => void
+  /**
+   * Turn the page with the volume buttons, but only while the reader UI is hidden;
+   * with the UI up they keep changing the volume. Android only.
+   */
+  volumeKeysTurnPages?: boolean | undefined
+  /**
+   * Swap which volume button goes forward.
+   */
+  invertVolumeKeys?: boolean | undefined
   onSelection?: (
     event: NativeSyntheticEvent<
       | {
@@ -312,6 +346,7 @@ export type EPUBViewProps = {
 
 export type FragmentPageProportion = {
   crossesPage: boolean
+  beforePage?: boolean
   proportionOnCurrentPage: number
 }
 
