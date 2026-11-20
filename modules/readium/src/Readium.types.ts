@@ -259,6 +259,11 @@ export type EPUBViewProps = {
   activeDictionaryDecorationId?: string | null | undefined
   /** Mirrors the open highlight menu so native can gate volume keys while it is shown. */
   activeHighlightDecorationId?: string | null | undefined
+  /**
+   * True while the JS selection menu is on screen. A plain selection has no decoration
+   * id, so native needs this to keep volume keys from turning pages under the menu.
+   */
+  selectionMenuVisible?: boolean | undefined
   colorTheme: { foreground: string; background: string }
   fontScale?: number | undefined
   lineHeight?: number | undefined

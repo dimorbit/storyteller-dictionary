@@ -84,6 +84,7 @@ data class Props(
     var dictionaryEntries: List<DictionaryEntryDecoration>?,
     var activeDictionaryDecorationId: String?,
     var activeHighlightDecorationId: String?,
+    var selectionMenuVisible: Boolean?,
     var bookmarks: List<Locator>?,
     var readaloudColor: Int?,
     var readaloudDecoratorStyle: String?,
@@ -113,6 +114,7 @@ data class FinalizedProps(
     var dictionaryEntries: List<DictionaryEntryDecoration>,
     var activeDictionaryDecorationId: String?,
     var activeHighlightDecorationId: String?,
+    var selectionMenuVisible: Boolean,
     var bookmarks: List<Locator>,
     var readaloudColor: Int,
     var readaloudDecoratorStyle: String,
@@ -578,7 +580,8 @@ window.storytellerClampDictionary();
         // a dictionary word menu. Mirror JS's activeHighlight into the gate so volume
         // keys keep adjusting volume while that menu is open.
         ReaderInputState.hasSelection =
-            isSelecting || menuVisible || props?.activeHighlightDecorationId != null
+            isSelecting || menuVisible || props?.activeHighlightDecorationId != null ||
+                props?.selectionMenuVisible == true
     }
 
     // Re-used on attach and after a navigator rebuild: a modal can detach the view
@@ -960,6 +963,7 @@ window.storytellerClampDictionary();
         dictionaryEntries = null,
         activeDictionaryDecorationId = null,
         activeHighlightDecorationId = null,
+        selectionMenuVisible = false,
         bookmarks = null,
         readaloudColor = null,
         readaloudDecoratorStyle = null,
@@ -1354,6 +1358,8 @@ window.storytellerClampDictionary();
                     ?: oldProps?.dictionaryEntries ?: listOf(),
                 activeDictionaryDecorationId = pendingProps.activeDictionaryDecorationId,
                 activeHighlightDecorationId = pendingProps.activeHighlightDecorationId,
+                selectionMenuVisible =
+                    pendingProps.selectionMenuVisible ?: oldProps?.selectionMenuVisible ?: false,
                 bookmarks = pendingProps.bookmarks ?: oldProps?.bookmarks ?: listOf(),
                 readaloudColor = pendingProps.readaloudColor
                     ?: oldProps?.readaloudColor ?: 0xffffff00.toInt(),
@@ -1502,6 +1508,10 @@ window.storytellerClampDictionary();
         }
 
         if (finalProps.activeHighlightDecorationId != oldProps?.activeHighlightDecorationId) {
+            publishHasSelection()
+        }
+
+        if (finalProps.selectionMenuVisible != oldProps?.selectionMenuVisible) {
             publishHasSelection()
         }
 

@@ -185,7 +185,8 @@ fun storytellerDecorationTemplates(): HtmlDecorationTemplates {
                    so the strip moves rather than the background being shifted. */
                 [data-writing-mode="vertical-rl"].$dictionaryUnderlineClass::after,
                 [data-writing-mode="sideways-rl"].$dictionaryUnderlineClass::after,
-                [data-writing-mode="vertical-lr"].$dictionaryUnderlineClass::after {
+                [data-writing-mode="vertical-lr"].$dictionaryUnderlineClass::after,
+                [data-writing-mode="sideways-lr"].$dictionaryUnderlineClass::after {
                     top: 0;
                     bottom: 0;
                     right: auto;

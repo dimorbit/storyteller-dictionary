@@ -338,6 +338,10 @@ class ReadiumModule : Module(), Listener {
                 view.pendingProps.activeHighlightDecorationId = prop
             }
 
+            Prop("selectionMenuVisible") { view: EpubView, prop: Boolean ->
+                view.pendingProps.selectionMenuVisible = prop
+            }
+
             Prop("bookmarks") { view: EpubView, prop: List<Map<String, Any>> ->
                 val bookmarks = prop.mapNotNull { Locator.fromJSON(JSONObject(it)) }
 

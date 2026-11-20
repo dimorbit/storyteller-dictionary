@@ -642,6 +642,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           )}
           activeDictionaryDecorationId={washDecorationId}
           activeHighlightDecorationId={activeHighlight}
+          selectionMenuVisible={showSelectionMenu}
           bookmarks={bookmarks?.map((bookmark) => bookmark.locator) ?? []}
           fontScale={preferences?.typography?.scale}
           lineHeight={preferences?.typography?.lineHeight}
