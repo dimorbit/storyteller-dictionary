@@ -176,6 +176,11 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
     activeHighlight: UUID | null
   }
   const menuStash = useRef(new Map<string, MenuSnapshot>())
+  // A swipe keeps the wash through the slide, then drops it so a hidden menu cannot
+  // keep volume keys gated or spend the next tap. The token cancels that drop when a
+  // menu is restored or a new one opens before the timer fires.
+  const menuWashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const menuWashToken = useRef(0)
   // The page the open menu belongs to, so the effect below can tell a turn away from
   // the recompute events Readium also emits.
   const menuPage = useRef<string | null>(null)
@@ -269,10 +274,16 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
 
   // Closes the selection menu and the native selection together.
   const closeSelection = useCallback(() => {
+    menuWashToken.current += 1
+    if (menuWashTimer.current !== null) {
+      clearTimeout(menuWashTimer.current)
+      menuWashTimer.current = null
+    }
     setSelection(null)
     setActiveHighlight(null)
     setActiveDictionaryEntryUuid(null)
     setWashDecorationId(null)
+    if (menuPage.current !== null) menuStash.current.delete(menuPage.current)
     menuPage.current = null
     clearNativeSelection()
   }, [clearNativeSelection])
@@ -304,6 +315,11 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   }, [selection, activeDictionaryEntryUuid, activeHighlight, washDecorationId])
 
   const restoreMenu = useCallback((snapshot: MenuSnapshot, page: string) => {
+    menuWashToken.current += 1
+    if (menuWashTimer.current !== null) {
+      clearTimeout(menuWashTimer.current)
+      menuWashTimer.current = null
+    }
     // A deleted entry must not be resurrected by a page turn.
     if (
       snapshot.activeDictionaryEntryUuid &&
@@ -711,6 +727,18 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
                   })
                 }
               }
+              menuWashToken.current += 1
+              const token = menuWashToken.current
+              if (menuWashTimer.current !== null) clearTimeout(menuWashTimer.current)
+              // Keep the wash through the slide, then drop the native active decoration.
+              // While it is set, volume keys stay gated and the first tap is spent closing
+              // a menu that is no longer on screen.
+              menuWashTimer.current = setTimeout(() => {
+                if (menuWashToken.current === token) {
+                  setWashDecorationId(null)
+                  menuWashTimer.current = null
+                }
+              }, 600)
               setSelection(null)
               setActiveHighlight(null)
               setActiveDictionaryEntryUuid(null)
@@ -722,9 +750,15 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             } else if ("cleared" in event.nativeEvent) {
               // A tab on the reader rather than a page turn: the stash must not hold
               // it, or coming back to this page would reopen a menu the reader closed.
+              menuWashToken.current += 1
+              if (menuWashTimer.current !== null) {
+                clearTimeout(menuWashTimer.current)
+                menuWashTimer.current = null
+              }
               setSelection(null)
               setActiveDictionaryEntryUuid(null)
               setWashDecorationId(null)
+              if (menuPage.current !== null) menuStash.current.delete(menuPage.current)
               menuPage.current = null
             } else {
               // Selecting something on another page replaces whatever was stashed
@@ -746,6 +780,11 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
             )
             if (!entry) return
 
+            menuWashToken.current += 1
+            if (menuWashTimer.current !== null) {
+              clearTimeout(menuWashTimer.current)
+              menuWashTimer.current = null
+            }
             setActiveHighlight(null)
             setActiveDictionaryEntryUuid(entry.uuid)
             setWashDecorationId(event.nativeEvent.decorationId)

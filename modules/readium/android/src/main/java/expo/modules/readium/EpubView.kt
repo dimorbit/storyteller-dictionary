@@ -236,7 +236,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         """
 
         private const val clampDictionaryDecorations = """
-(function () {
+window.storytellerClampDictionary = function () {
   var beganAt = (window.performance && performance.now) ? performance.now() : 0;
   var stats = { items: 0, nodes: 0, rects: 0, walkMs: 0, geomMs: 0, layouts: 0 };
   var made = 0;
@@ -467,7 +467,8 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
   } catch (e) {
     return 'ERR:' + e + ' after:' + made;
   }
-})();
+};
+window.storytellerClampDictionary();
         """
 
         private const val removeDuplicateDictionaryMarks = """
@@ -534,11 +535,14 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // rather than the prop: the prop travels back through JS, so it is still null in the
     // frame where the menu opens.
     private fun publishHasSelection() {
-        ReaderInputState.hasSelection = isSelecting || activeDictionaryId != null
+        ReaderInputState.hasSelection = isSelecting || menuVisible
     }
 
     override fun onDetachedFromWindow() {
         resetSelectionLayout()
+        // The activity reads this gate before JS sees a key. If the reader leaves with
+        // the UI hidden it would keep swallowing volume keys on every other screen.
+        ReaderInputState.volumeKeysTurnPages = false
         super.onDetachedFromWindow()
     }
 
@@ -603,6 +607,12 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                 // The menu goes at once. A swipe is the reader leaving this text, so the
                 // menu should not linger until the page has finished moving; "swiping"
                 // tells JS to hide it but keep it, so an abandoned swipe can put it back.
+                // The wash id stays for the slide, but the menu is no longer visible, so
+                // stop gating volume keys and swallowing taps on the destination page.
+                if (activeDictionaryId != null) {
+                    menuVisible = false
+                    publishHasSelection()
+                }
                 onSelection(mapOf("swiping" to true))
                 // Neither the browser selection nor its shading is touched. The pager's
                 // drag is blocked by `isSelecting` on Readium's WebView, and that flag is
@@ -656,6 +666,10 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                         swipeSelectionCleared = false
                         // No turn happened, so the reader is still on this page: the menu
                         // goes back. "restore" tells JS this was not a dismissal.
+                        if (activeDictionaryId != null) {
+                            menuVisible = true
+                            publishHasSelection()
+                        }
                         onSelection(mapOf("restore" to true))
                     }
                     // Cleared here too when no turn arrived; onPageChanged clears it when
@@ -770,6 +784,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
     // the swipe's own deadline is then recognised as that swipe's tail rather than a
     // fresh dismissal, which is what lost the menu and highlight under fast switching.
     private var sawTurnSinceSwipeStart: Boolean = false
+    // A word menu can be hidden by a swipe while its wash is kept for the slide. The wash
+    // id alone cannot tell the two apart, so volume gating and tap dismissal use this flag.
+    private var menuVisible: Boolean = false
     var selectionActionModeCallback: SelectionActionModeCallback? = null
     private val webViews = LinkedHashSet<WebView>()
     private val webViewScrollPositions = mutableMapOf<WebView, Pair<Int, Int>>()
@@ -1458,7 +1475,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
                     onMiddleTouch(mapOf())
                     return true
                 }
-                if (activeDictionaryId != null) {
+                if (menuVisible) {
                     onSelection(mapOf("cleared" to true))
                     setActiveDictionaryDecoration(null)
                     // The tap only closes the menu. Letting it through turns the page and
@@ -1519,6 +1536,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     fun destroyNavigator() {
         resetSelectionLayout()
+        ReaderInputState.volumeKeysTurnPages = false
         selectionActionModeCallback = null
         pendingJumpLocator = null
         cancelJumpPosition()
@@ -2630,15 +2648,13 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
             // it walks the chapter word by word per item. Arriving at a chapter with no saved
             // word in it used to run that whole script over an empty group, twice, while the
             // incoming page was still laying out - and the pass that did have marks waited
-            // behind it. The group still has to be cleared when the chapter changes, or
-            // the previous chapter's boxes survive in the reader's store; that is cheap.
+            // behind it. Applying the empty list is cheap, and it is the only way to
+            // remove dots for a word deleted while the reader is still on this chapter.
             if (dictionaryDecorations.isEmpty()) {
                 val href = navigator?.currentLocator?.value?.href
-                if (href != decoratedDictionaryHref) {
-                    dictionaryDecorationMutex.withLock {
-                        decoratedDictionaryHref = href
-                        navigator?.applyDecorations(emptyList(), group = "dictionary")
-                    }
+                dictionaryDecorationMutex.withLock {
+                    decoratedDictionaryHref = href
+                    navigator?.applyDecorations(emptyList(), group = "dictionary")
                 }
                 return@launch
             }
@@ -2710,6 +2726,9 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         if (activeDictionaryId == id) return
         val previous = activeDictionaryId
         activeDictionaryId = id
+        // A non-null id means a menu just opened. A swipe can leave the id set while the
+        // menu is hidden; that path clears menuVisible without calling this setter.
+        menuVisible = id != null
         // Opening or closing a menu changes whether volume keys turn the page.
         publishHasSelection()
         // Re-applying the whole list just to move one wash rebuilds every box: the

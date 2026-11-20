@@ -1,6 +1,7 @@
 import { useIsFocused, useLocalSearchParams, useSegments } from "expo-router"
 import { StatusBar } from "expo-status-bar"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
+import { AppState } from "react-native"
 
 import { Epub } from "@/components/Epub"
 import { LoadingView } from "@/components/LoadingView"
@@ -54,6 +55,17 @@ export default function BookScreen() {
   const showEpub =
     !!book && !!locator && (isFocused || isReaderSheetOpen) && !isAudioLoading
 
+  // The reader now stays mounted in the background, so focus alone can no longer
+  // decide the playback-speed context. Locking the screen must still switch a
+  // readaloud book from the Readaloud speed to the Listening speed.
+  const [appActive, setAppActive] = useState(AppState.currentState === "active")
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      setAppActive(state === "active")
+    })
+    return () => subscription.remove()
+  }, [])
+
   useEffect(() => {
     dispatch(bookshelfSlice.actions.bookOpened({ bookUuid: uuid, format }))
   }, [dispatch, format, uuid])
@@ -61,7 +73,10 @@ export default function BookScreen() {
   useEffect(() => {
     dispatch(
       bookshelfSlice.actions.playbackSpeedContextChanged({
-        context: format === "readaloud" && showEpub ? "reading" : "listening",
+        context:
+          format === "readaloud" && showEpub && appActive
+            ? "reading"
+            : "listening",
       }),
     )
 
@@ -72,7 +87,7 @@ export default function BookScreen() {
         }),
       )
     }
-  }, [dispatch, format, showEpub])
+  }, [dispatch, format, showEpub, appActive])
 
   const spansFold = useSpansFold()
 
