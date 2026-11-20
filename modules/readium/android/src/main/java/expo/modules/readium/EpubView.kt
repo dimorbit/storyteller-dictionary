@@ -273,7 +273,7 @@ window.storytellerClampDictionary = function () {
   function lineRects(range, limit) {
     var root = range.commonAncestorContainer;
     var walkRoot = (root.nodeType === 3) ? root.parentNode : root;
-    if (!walkRoot) return [];
+    if (!walkRoot) return { lines: [], truncated: false };
     var walker = document.createTreeWalker(walkRoot, NodeFilter.SHOW_TEXT, null, false);
     var sub = document.createRange(), lines = [], words = 0, node;
     var tWalk = 0, tGeom = 0, nodesVisited = 0;
@@ -330,7 +330,16 @@ window.storytellerClampDictionary = function () {
     stats.nodes += nodesVisited;
     stats.walkMs += tWalk;
     stats.geomMs += tGeom;
-    return lines;
+    var truncated = false;
+    if (words >= limit) {
+      // Words past the cap still belong to this mark. Their boxes must keep their
+      // own dots and tap targets instead of being hidden with the measured ones.
+      var tail = document.createRange();
+      tail.setStart(sub.endContainer, sub.endOffset);
+      tail.setEnd(range.endContainer, range.endOffset);
+      truncated = !tail.collapsed && tail.toString().trim().length > 0;
+    }
+    return { lines: lines, truncated: truncated };
   }
 
   function now() {
@@ -399,7 +408,8 @@ window.storytellerClampDictionary = function () {
       return;
     }
 
-    var lines = lineRects(range, 600);
+    var measured = lineRects(range, 600);
+    var lines = measured.lines;
     stats.items++;
     stats.layouts++;
 
@@ -429,6 +439,7 @@ window.storytellerClampDictionary = function () {
       originLeft: originLeft,
       originTop: originTop,
       template: template,
+      truncated: measured.truncated,
       revealOnly: false
     });
     made += lines.length;
@@ -467,7 +478,11 @@ window.storytellerClampDictionary = function () {
         box.style.height = boxH + 'px';
         box.style.marginRight = '0';
       });
-      for (var b = used; b < boxes.length; b++) boxes[b].style.display = 'none';
+      // With a capped measurement the untouched boxes already sit on the words past
+      // the cap; hiding them would strip their underlines and dictionary tap targets.
+      if (!plan.truncated) {
+        for (var b = used; b < boxes.length; b++) boxes[b].style.display = 'none';
+      }
 
       hideDots(plan.item, container);
 
