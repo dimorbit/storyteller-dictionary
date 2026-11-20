@@ -830,7 +830,7 @@ window.storytellerClampDictionary();
             // ChapterPageTurn returns true when it scrolled the current page itself, and null at a
             // chapter boundary or when the page cannot be measured - both of which Readium's own
             // navigation covers, unchanged.
-            if (ChapterPageTurn.forward(nav, animated = animated, rtl = chapterTurnRtl) == true) {
+            if (ChapterPageTurn.forward(webViews, animated = animated, rtl = chapterTurnRtl) == true) {
                 return@launch
             }
             nav.goForward(animated = animated)
@@ -845,7 +845,7 @@ window.storytellerClampDictionary();
         val host = activity ?: return
         host.lifecycleScope.launch {
             val nav = navigator ?: return@launch
-            if (ChapterPageTurn.backward(nav, animated = animated, rtl = chapterTurnRtl) == true) {
+            if (ChapterPageTurn.backward(webViews, animated = animated, rtl = chapterTurnRtl) == true) {
                 return@launch
             }
             nav.goBackward(animated = animated)
