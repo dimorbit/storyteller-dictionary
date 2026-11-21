@@ -1435,21 +1435,30 @@ window.storytellerClampDictionary();
             // there is what made hide/show/hide walk the reading position away.
             !(oldProps.readerUiVisible && !finalProps.readerUiVisible)
         ) {
-            // Undo only the shift the fallback placement recorded for this resource, and
-            // only while the page has not scrolled since. The measured placement and the
-            // padding path keep their space on their own, so neither leaves an appliedShift.
+            // Give back everything the jump added to reveal the target behind the bar:
+            // both the scroll shift and any body padding added near a resource boundary.
+            // Skip it if the reader has moved since, so a user scroll is never undone.
             activity?.lifecycleScope?.launch {
                 navigator?.evaluateJavascript(
                     """
                     (function () {
                       var guard = globalThis.__storytellerJumpGuard;
-                      if (!guard || !(guard.appliedShift > 0)) return;
-                      var scroller = document.scrollingElement || document.documentElement;
-                      if (!scroller || scroller.scrollTop !== guard.appliedTop) return;
-                      var shift = guard.appliedShift;
+                      if (!guard || guard.input) return;
+                      var pad = guard.appliedPadding || 0;
+                      var shift = guard.appliedShift || 0;
+                      if (pad <= 0 && shift <= 0) return;
+                      guard.appliedPadding = 0;
                       guard.appliedShift = 0;
-                      var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
-                      scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
+                      var scroller = document.scrollingElement || document.documentElement;
+                      var body = document.body;
+                      if (pad > 0 && body) {
+                        var current = parseFloat(getComputedStyle(body).paddingTop) || 0;
+                        body.style.setProperty('padding-top', Math.max(0, current - pad) + 'px', 'important');
+                      }
+                      if (shift > 0 && scroller && scroller.scrollTop === guard.appliedTop) {
+                        var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
+                        scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
+                      }
                     })();
                     """.trimIndent()
                 )
@@ -3675,6 +3684,13 @@ window.storytellerClampDictionary();
                             now > $deadline || scroller.scrollTop !== $landingTop) return { moved: true };
                         const locator = ${jump.toJSON()};
                         const body = document.body;
+                        // Record the space we add so the bar-dismiss undo can give it back.
+                        const initialPadding = parseFloat(getComputedStyle(body).paddingTop) || 0;
+                        const recordPlacement = () => {
+                            guard.appliedPadding = (parseFloat(getComputedStyle(body).paddingTop) || 0) - initialPadding;
+                            guard.appliedShift = $landingTop - scroller.scrollTop;
+                            guard.appliedTop = scroller.scrollTop;
+                        };
                         const normalize = (text) => text.replace(/\s+/g, ' ').trim();
                         const quote = normalize(locator.text?.highlight || '');
                         if (!body || !quote) return false;
@@ -3793,13 +3809,12 @@ window.storytellerClampDictionary();
                                 if (Math.abs(delta) <= 1) break;
                                 let nextTop = scroller.scrollTop + delta;
                                 if (nextTop < 0) {
-                                    // Keep this space until the resource unloads so dismissing the bar moves nothing.
                                     const padding = parseFloat(getComputedStyle(body).paddingTop) || 0;
                                     if (!storytellerAPI.isJumpPositionCurrent($generation) ||
                                         guard.id !== $landingId || guard.input || performance.now() > $deadline) return { moved: true };
                                     body.style.setProperty('padding-top', (padding - nextTop) + 'px', 'important');
                                     current = firstRect();
-                                    if (!current) return { placed: true };
+                                    if (!current) { recordPlacement(); return { placed: true }; }
                                     delta = current.top - target;
                                     nextTop = scroller.scrollTop + delta;
                                 }
@@ -3807,6 +3822,7 @@ window.storytellerClampDictionary();
                                     guard.id !== $landingId || guard.input || performance.now() > $deadline) return { moved: true };
                                 scroller.scrollTop = Math.max(0, nextTop);
                             }
+                            recordPlacement();
                             return { placed: true };
                         } finally {
                             if (behavior) scroller.style.setProperty('scroll-behavior', behavior, priority);
