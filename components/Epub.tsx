@@ -627,13 +627,10 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           style={{ flex: 1 }}
           bookUuid={book.uuid}
           locator={locator}
-          jumpBarBottom={
-            returnPosition &&
-            preferences?.showReaderUi &&
-            (rail || !floatingToolbar || toolbarHeight > 0)
-              ? returnBarBottom
-              : 0
-          }
+          // The return bar is a temporary overlay. Never shift the reader for it:
+          // any shift has to be undone later, and a missed undo leaves an empty gap
+          // above the text after the bar auto-dismisses.
+          jumpBarBottom={0}
           highlights={highlights ?? []}
           dictionaryEntries={(dictionaryEntries ?? []).map(
             ({ uuid, word, bookUuid, locator }) => ({
