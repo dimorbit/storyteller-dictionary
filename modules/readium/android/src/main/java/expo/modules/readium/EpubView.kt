@@ -205,7 +205,7 @@ class EpubView(context: Context, appContext: AppContext) : ExpoView(context, app
         // Readium sizes each dot box from the range's client rects, which are full
         // line boxes wherever the range runs past a line, so the dots run to the
         // margin and one merged box covers several lines. This measures the saved
-        // range word by word — a word never crosses a line break — and rebuilds one
+        // range word by word â€” a word never crosses a line break â€” and rebuilds one
         // box per line, clamped to that line's first and last glyph. Boxes are held
         // back by the pending class until they are sized, so the wrong geometry is
         // never painted. It is idempotent: every pass recomputes and clears its own
@@ -572,7 +572,7 @@ window.storytellerClampDictionary();
         //
         // Nothing else is skipped. An earlier version held this off for the duration of a
         // page-turn gesture to stop it stalling image-heavy slides, but the upstream app
-        // this forked from runs the pass unconditionally and has no such lag — so the
+        // this forked from runs the pass unconditionally and has no such lag â€” so the
         // suppression was the regression, not the cure. Readium's own pager needs the
         // view laid out to scroll it, and withholding that made backward turns stutter.
         val skip = isSelecting || now < selectionLayoutHoldUntil
@@ -679,7 +679,7 @@ window.storytellerClampDictionary();
             // Whether to act is decided from state that cannot go stale: a word menu is
             // open exactly when the active decoration id is set, and a text selection is
             // open exactly when isSelecting is. A third derived flag used to sit here and
-            // went out of step — endSelection() and the swipe path both rewrote it — so
+            // went out of step â€” endSelection() and the swipe path both rewrote it â€” so
             // the branch was skipped and the menu only hid when the turn completed, from
             // onPageTurned, which is the animation's end.
             val menuOpen = isSelecting ||
@@ -718,7 +718,7 @@ window.storytellerClampDictionary();
                 activity?.lifecycleScope?.launch {
                     // The pin is dropped here, at the start of the drag, not at its end.
                     // It re-asserts scrollLeft on every scroll event, and a reflowable page
-                    // turn *is* a horizontal scroll — so while it was held the pager's own
+                    // turn *is* a horizontal scroll â€” so while it was held the pager's own
                     // movement was being undone, which is the backward-turn lag. It only
                     // exists to keep handle-dragging steady, and no handle is being dragged
                     // during a page swipe.
@@ -750,7 +750,7 @@ window.storytellerClampDictionary();
                 // The selection may have to come back: a swipe that turns no page leaves
                 // the reader where it started, so the menu and its highlight are put back
                 // rather than dismissed. The scroll pin was already dropped when the drag
-                // began — holding it to here is what fought the turn.
+                // began â€” holding it to here is what fought the turn.
                 val activityScope = activity?.lifecycleScope
                 val restoreGeneration = swipeGestureGeneration
                 activityScope?.launch {
@@ -793,11 +793,11 @@ window.storytellerClampDictionary();
 
     // When the WebView has an active InputConnection (after a touch/tap), Android routes
     // the next key's ACTION_DOWN through the IME dispatch path (ViewRootImpl.dispatchKeyFromIme),
-    // which calls dispatchKeyEventPreIme directly on the view hierarchy — bypassing
+    // which calls dispatchKeyEventPreIme directly on the view hierarchy â€” bypassing
     // Activity.dispatchKeyEvent entirely. By intercepting here, we handle both cases:
     //   - Normal (WebView not focused): Activity.dispatchKeyEvent fires first, returns true,
-    //     view hierarchy never sees it → no double navigation.
-    //   - After touch (WebView focused): Activity never sees DOWN, we catch it here → works.
+    //     view hierarchy never sees it â†’ no double navigation.
+    //   - After touch (WebView focused): Activity never sees DOWN, we catch it here â†’ works.
     override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
@@ -918,6 +918,9 @@ window.storytellerClampDictionary();
     // fresh dismissal, which is what lost the menu and highlight under fast switching.
     private var sawTurnSinceSwipeStart: Boolean = false
     private var chapterTurnRtl: Boolean = false
+    // The selection scroll-pin reverses any scroll while a selection is live, so
+    // bar cleanup has to wait until the selection ends.
+    private var pendingBarCleanup: Boolean = false
     // A word menu can be hidden by a swipe while its wash is kept for the slide. The wash
     // id alone cannot tell the two apart, so volume gating and tap dismissal use this flag.
     private var menuVisible: Boolean = false
@@ -952,6 +955,10 @@ window.storytellerClampDictionary();
 
     fun endSelection() {
         isSelecting = false
+        if (pendingBarCleanup) {
+            pendingBarCleanup = false
+            clearReturnBarPlacement()
+        }
         publishHasSelection()
         guardSelectionTaps()
         // The action mode can be recreated between handle moves. Hold the
@@ -960,7 +967,7 @@ window.storytellerClampDictionary();
         // The scroll pin is what keeps the page still while the selection is collapsed:
         // Readium's own selectionchange handler scrolls the page by half a gutter to
         // hide the handles, and releasing the pin at the same moment let that scroll
-        // through — the jitter seen when a swipe ended a selection. A gesture that is
+        // through â€” the jitter seen when a swipe ended a selection. A gesture that is
         // still travelling releases the pin when it finishes, not here.
         if (swipeSelectionCleared) return
         activity?.lifecycleScope?.launch {
@@ -1444,53 +1451,12 @@ window.storytellerClampDictionary();
             // there is what made hide/show/hide walk the reading position away.
             !(oldProps.readerUiVisible && !finalProps.readerUiVisible)
         ) {
-            // Give back everything the jump added to reveal the target behind the bar:
-            // both the scroll shift and any body padding added near a resource boundary.
-            // Skip it if the reader has moved since, so a user scroll is never undone.
-            activity?.lifecycleScope?.launch {
-                val undo = """
-                    (function () {
-                      var body = document.body;
-                      var scroller = document.scrollingElement || document.documentElement;
-                      // Read this before removing padding: that removal changes the
-                      // maximum scroll and can clamp scrollTop on its own.
-                      var topBefore = scroller ? scroller.scrollTop : 0;
-                      var pad = 0;
-                      // The marker travels with the element, so it is found even when the
-                      // page that received the padding is no longer the navigator's current
-                      // WebView. Several page WebViews stay alive during a chapter turn.
-                      if (body && body.getAttribute('data-storyteller-jump-pad') !== null) {
-                        var original = parseFloat(body.getAttribute('data-storyteller-jump-pad')) || 0;
-                        var current = parseFloat(getComputedStyle(body).paddingTop) || 0;
-                        pad = Math.max(0, current - original);
-                        body.removeAttribute('data-storyteller-jump-pad');
-                        body.style.setProperty('padding-top', original + 'px', 'important');
-                      }
-                      var guard = globalThis.__storytellerJumpGuard;
-                      // A native JS scroll (Page Up/Down, chapter jumps) does not set
-                      // guard.input, so compare the position as well.
-                      var moved = !!guard && (guard.input || topBefore !== guard.appliedTop);
-                      if (moved) {
-                        // Removing padding moves text up on screen. Scroll up by the same
-                        // amount, using the position captured before the removal.
-                        if (pad > 0 && scroller) {
-                          scroller.scrollTop = Math.max(0, topBefore - pad);
-                        }
-                        if (guard) guard.appliedShift = 0;
-                        return;
-                      }
-                      if (!guard) return;
-                      var shift = guard.appliedShift || 0;
-                      if (shift <= 0) return;
-                      guard.appliedShift = 0;
-                      if (scroller && scroller.scrollTop === guard.appliedTop) {
-                        var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
-                        scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
-                      }
-                    })();
-                """.trimIndent()
-                webViews.forEach { it.evaluateJavascript(undo, null) }
-                navigator?.evaluateJavascript(undo)
+            // The selection pin cancels any compensating scroll, so defer until the
+            // selection ends instead of shifting text underneath the user's selection.
+            if (isSelecting) {
+                pendingBarCleanup = true
+            } else {
+                clearReturnBarPlacement()
             }
         }
         // Changing the overlay alone must not run navigation or playback follow.
@@ -1619,6 +1585,43 @@ window.storytellerClampDictionary();
             didNavigateToLocator = shouldNavigateToLocator
         )
         layoutBehavior.submitReadingPreferences(this, layoutChange)
+    }
+
+    private fun clearReturnBarPlacement() {
+        activity?.lifecycleScope?.launch {
+            val undo = """
+                (function () {
+                  var body = document.body;
+                  var scroller = document.scrollingElement || document.documentElement;
+                  var topBefore = scroller ? scroller.scrollTop : 0;
+                  var pad = 0;
+                  if (body && body.getAttribute('data-storyteller-jump-pad') !== null) {
+                    var original = parseFloat(body.getAttribute('data-storyteller-jump-pad')) || 0;
+                    var current = parseFloat(getComputedStyle(body).paddingTop) || 0;
+                    pad = Math.max(0, current - original);
+                    body.removeAttribute('data-storyteller-jump-pad');
+                    body.style.setProperty('padding-top', original + 'px', 'important');
+                  }
+                  var guard = globalThis.__storytellerJumpGuard;
+                  var moved = !!guard && (guard.input || topBefore !== guard.appliedTop);
+                  if (moved) {
+                    if (pad > 0 && scroller) scroller.scrollTop = Math.max(0, topBefore - pad);
+                    if (guard) guard.appliedShift = 0;
+                    return;
+                  }
+                  if (!guard) return;
+                  var shift = guard.appliedShift || 0;
+                  if (shift <= 0) return;
+                  guard.appliedShift = 0;
+                  if (scroller && scroller.scrollTop === guard.appliedTop) {
+                    var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
+                    scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
+                  }
+                })();
+            """.trimIndent()
+            webViews.forEach { it.evaluateJavascript(undo, null) }
+            navigator?.evaluateJavascript(undo)
+        }
     }
 
     fun initializeNavigator() {
@@ -2345,8 +2348,8 @@ window.storytellerClampDictionary();
                 // DiffUtil's OLD position, so any Change it emits can throw
                 // IndexOutOfBoundsException and kill the app. A Change is emitted not
                 // only when the list shrinks but whenever an item keeps its id and
-                // changes content — a locator or colour edit does that at the same
-                // size — so comparing sizes cannot rule it out. The only safe rule is
+                // changes content â€” a locator or colour edit does that at the same
+                // size â€” so comparing sizes cannot rule it out. The only safe rule is
                 // to never let the reader diff two non-empty lists: clearing produces
                 // removals, filling produces insertions, and neither emits a Change.
                 navigator?.applyDecorations(emptyList(), group = "highlights")
@@ -2609,7 +2612,7 @@ window.storytellerClampDictionary();
         // A search that is still running will repaint with the words it finds. Painting
         // now would use the saved-locator fallback, which carries a different locator
         // for the same decoration ids; the later repaint then differs in content only,
-        // which the reader reports as a Change at an old index — the index that crashes
+        // which the reader reports as a Change at an old index â€” the index that crashes
         // inside its own diff. Waiting for the search keeps each id's content stable.
         // The paint the search makes when it finishes is the exception: it is the paint
         // this guard is waiting for, and its own job is still active when it runs.
@@ -2656,7 +2659,7 @@ window.storytellerClampDictionary();
                     // Never the active flag. It is part of the style, and the style is
                     // what the reader compares when diffing: baking it in made every tap
                     // and every entry change alter a decoration's content, which the
-                    // reader reports as a Change at an old index — the index that
+                    // reader reports as a Change at an old index â€” the index that
                     // crashes inside its own diff. The wash is a CSS class that
                     // setActiveDictionaryDecoration moves in the page without repainting,
                     // so the decorations themselves stay identical across taps.
@@ -2729,7 +2732,7 @@ window.storytellerClampDictionary();
         // A mark is covered when another's span contains it (identical spans are settled
         // by id, smaller first). Sorted by start, longest first, every covering mark is
         // seen before the ones it covers, so one pass finds them all. The old per-mark
-        // full scan was O(n²): 10,000 disjoint matches cost ~200M id allocations and
+        // full scan was O(nÂ²): 10,000 disjoint matches cost ~200M id allocations and
         // comparisons on the main thread while a chapter was entered.
         val coveredIds = HashSet<String>()
         var farthestEnd = Int.MIN_VALUE
@@ -2893,7 +2896,7 @@ window.storytellerClampDictionary();
                 // Change with a position in the OLD list, and Readium indexes the NEW
                 // list with it (`target[position + i]` in DecorableNavigator.kt). A group
                 // that shrinks therefore throws IndexOutOfBoundsException inside the
-                // reader and kills the app — it happened with an index around 100 against
+                // reader and kills the app â€” it happened with an index around 100 against
                 // a list of about 32. So the group is never updated in place: it is
                 // emptied first, which can only produce removals, then filled, which can
                 // only produce insertions. Neither emits a Change, so the bad index is
@@ -3580,7 +3583,7 @@ window.storytellerClampDictionary();
         if (isSelecting) guardSelectionTaps()
         selectionActionModeCallback?.handleSelectionCleared()
         // A swipe scrolls the document, the browser collapses the Selection, and this
-        // fires — after the turn, not before it. Reporting it would unmount the menu as a
+        // fires â€” after the turn, not before it. Reporting it would unmount the menu as a
         // fresh dismissal and throw away the stash for the page being left, which is how
         // the menu ended up showing on the new page. The deadline outlives the turn for
         // exactly this reason; and past the deadline a turn since the gesture began means
@@ -3963,7 +3966,7 @@ window.storytellerClampDictionary();
         if (pageTurned && activeDictionaryId != null && !wasSwiping) {
             // The wash is a class on the decoration box inside the page, so it travels
             // with the text while the page slides. It is cleared here only for a turn the
-            // reader did not start with a swipe — a tap, a key, a jump — where there is no
+            // reader did not start with a swipe â€” a tap, a key, a jump â€” where there is no
             // slide to keep it through. A swipe keeps it.
             setActiveDictionaryDecoration(null)
         }
