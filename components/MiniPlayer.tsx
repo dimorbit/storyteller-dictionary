@@ -192,8 +192,9 @@ export function MiniPlayer({
 
   return (
     bookPrefs && (
-      <View onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}>
+      <View>
         <HideableView
+          onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
           hidden={hidden}
           className={cn(
             "ios:pb-[max(calc(env(safe-area-inset-bottom)_-_--spacing(4)),--spacing(2))] android:pb-2 z-3 px-safe-or-3",

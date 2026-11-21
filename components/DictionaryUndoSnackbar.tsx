@@ -29,7 +29,7 @@ export function DictionaryUndoSnackbar({
     <View
       pointerEvents="box-none"
       className="absolute right-4 left-4 z-100"
-      style={{ bottom: bottomOffset + insets.bottom + 12 }}
+      style={{ bottom: (bottomOffset || insets.bottom) + 12 }}
     >
       <View className="bg-foreground flex-row items-center justify-between rounded-md px-4 py-3 shadow-lg">
         <Text className="text-background flex-1">Removed from Dictionary</Text>
