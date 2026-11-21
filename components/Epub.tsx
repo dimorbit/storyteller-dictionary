@@ -106,6 +106,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const [washDecorationId, setWashDecorationId] = useState<string | null>(null)
   const [dictionaryUndoEntry, setDictionaryUndoEntry] =
     useState<DictionaryEntry | null>(null)
+  const [playerHeight, setPlayerHeight] = useState(0)
 
   const {
     data: bookPreferences,
@@ -869,6 +870,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
         />
       </View>
       <MiniPlayer
+        onHeight={setPlayerHeight}
         floatingToolbar={floatingToolbar ?? false}
         hidden={!preferences?.showReaderUi}
         book={book}
@@ -877,6 +879,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
       {dictionaryUndoEntry && (
         <DictionaryUndoSnackbar
           entry={dictionaryUndoEntry}
+          bottomOffset={playerHeight}
           onUndo={() => {
             void undoDictionaryDelete()
           }}

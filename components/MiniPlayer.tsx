@@ -43,9 +43,11 @@ type Props = {
   format: "ebook" | "readaloud"
   hidden: boolean
   floatingToolbar: boolean
+  onHeight?: ((height: number) => void) | undefined
 }
 
-export function MiniPlayer({ book, format, hidden, floatingToolbar }: Props) {
+export function MiniPlayer({
+  onHeight, book, format, hidden, floatingToolbar }: Props) {
   const locator = book.position?.locator
   const { data: bookPrefs } = useGetBookPreferencesQuery({ uuid: book.uuid })
   const position = useAppSelector(getPosition)
@@ -190,7 +192,7 @@ export function MiniPlayer({ book, format, hidden, floatingToolbar }: Props) {
 
   return (
     bookPrefs && (
-      <View>
+      <View onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}>
         <HideableView
           hidden={hidden}
           className={cn(
