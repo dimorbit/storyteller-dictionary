@@ -3812,6 +3812,9 @@ window.storytellerClampDictionary();
                                     const padding = parseFloat(getComputedStyle(body).paddingTop) || 0;
                                     if (!storytellerAPI.isJumpPositionCurrent($generation) ||
                                         guard.id !== $landingId || guard.input || performance.now() > $deadline) return { moved: true };
+                                    // Mark the original value on the element itself, so cleanup does
+                                    // not depend on which WebView is current or on the in-page guard.
+                                    body.setAttribute('data-storyteller-jump-pad', String(padding));
                                     body.style.setProperty('padding-top', (padding - nextTop) + 'px', 'important');
                                     current = firstRect();
                                     if (!current) { recordPlacement(); return { placed: true }; }
