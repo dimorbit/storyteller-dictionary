@@ -629,10 +629,14 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           style={{ flex: 1 }}
           bookUuid={book.uuid}
           locator={locator}
-          // The return bar is a temporary overlay. Never shift the reader for it:
-          // any shift has to be undone later, and a missed undo leaves an empty gap
-          // above the text after the bar auto-dismisses.
-          jumpBarBottom={0}
+          // Paged mode must never reserve space: a missed undo left a permanent
+          // blank strip above the text. Scroll mode top-aligns a bookmarked quote,
+          // so there the target needs clearance while the bar is on screen.
+          jumpBarBottom={
+            preferences?.scrollMode && returnPosition && preferences?.showReaderUi
+              ? navigationReturnHeight
+              : 0
+          }
           highlights={highlights ?? []}
           dictionaryEntries={(dictionaryEntries ?? []).map(
             ({ uuid, word, bookUuid, locator }) => ({

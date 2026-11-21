@@ -816,7 +816,16 @@ window.storytellerClampDictionary();
         return super.dispatchKeyEventPreIme(event)
     }
 
+    /** Refresh the WebView set from the live view tree before a turn picks a target. */
+    private fun collectPageWebViews(view: android.view.View) {
+        if (view is WebView) webViews.add(view)
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) collectPageWebViews(view.getChildAt(i))
+        }
+    }
+
     fun turnPageForward(animated: Boolean = true) {
+        navigator?.view?.let { collectPageWebViews(it) }
         // Scroll layout has a single horizontal page, so ChapterPageTurn falls back and
         // Readium's own turns are disabled there (disablePageTurnsWhileScrolling). Route
         // key presses through the same scroll navigation the edge taps use.
@@ -838,6 +847,7 @@ window.storytellerClampDictionary();
     }
 
     fun turnPageBackward(animated: Boolean = true) {
+        navigator?.view?.let { collectPageWebViews(it) }
         if (props?.scrollMode == true) {
             handleScrollModeEdgeTap(goForward = false)
             return
