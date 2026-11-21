@@ -1465,11 +1465,11 @@ window.storytellerClampDictionary();
                       var guard = globalThis.__storytellerJumpGuard;
                       var scroller = document.scrollingElement || document.documentElement;
                       if (guard && guard.input) {
-                        // The reader moved after the jump. Removing the padding pulls the
-                        // text up; scroll down by the same amount to keep the user's place.
+                        // Removing padding moves the text up on screen. Scrolling up by
+                        // the same amount keeps the same lines in place; scrolling down
+                        // would move them up a second time.
                         if (pad > 0 && scroller) {
-                          var maxIn = Math.max(0, scroller.scrollHeight - window.innerHeight);
-                          scroller.scrollTop = Math.min(maxIn, scroller.scrollTop + pad);
+                          scroller.scrollTop = Math.max(0, scroller.scrollTop - pad);
                         }
                         return;
                       }
