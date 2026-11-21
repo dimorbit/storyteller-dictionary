@@ -1451,6 +1451,10 @@ window.storytellerClampDictionary();
                 val undo = """
                     (function () {
                       var body = document.body;
+                      var scroller = document.scrollingElement || document.documentElement;
+                      // Read this before removing padding: that removal changes the
+                      // maximum scroll and can clamp scrollTop on its own.
+                      var topBefore = scroller ? scroller.scrollTop : 0;
                       var pad = 0;
                       // The marker travels with the element, so it is found even when the
                       // page that received the padding is no longer the navigator's current
@@ -1463,14 +1467,16 @@ window.storytellerClampDictionary();
                         body.style.setProperty('padding-top', original + 'px', 'important');
                       }
                       var guard = globalThis.__storytellerJumpGuard;
-                      var scroller = document.scrollingElement || document.documentElement;
-                      if (guard && guard.input) {
-                        // Removing padding moves the text up on screen. Scrolling up by
-                        // the same amount keeps the same lines in place; scrolling down
-                        // would move them up a second time.
+                      // A native JS scroll (Page Up/Down, chapter jumps) does not set
+                      // guard.input, so compare the position as well.
+                      var moved = !!guard && (guard.input || topBefore !== guard.appliedTop);
+                      if (moved) {
+                        // Removing padding moves text up on screen. Scroll up by the same
+                        // amount, using the position captured before the removal.
                         if (pad > 0 && scroller) {
-                          scroller.scrollTop = Math.max(0, scroller.scrollTop - pad);
+                          scroller.scrollTop = Math.max(0, topBefore - pad);
                         }
+                        if (guard) guard.appliedShift = 0;
                         return;
                       }
                       if (!guard) return;
@@ -3837,7 +3843,9 @@ window.storytellerClampDictionary();
                                         guard.id !== $landingId || guard.input || performance.now() > $deadline) return { moved: true };
                                     // Mark the original value on the element itself, so cleanup does
                                     // not depend on which WebView is current or on the in-page guard.
-                                    body.setAttribute('data-storyteller-jump-pad', String(padding));
+                                    if (!body.hasAttribute('data-storyteller-jump-pad')) {
+                                        body.setAttribute('data-storyteller-jump-pad', String(padding));
+                                    }
                                     body.style.setProperty('padding-top', (padding - nextTop) + 'px', 'important');
                                     current = firstRect();
                                     if (!current) { recordPlacement(); return { placed: true }; }
