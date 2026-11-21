@@ -1439,29 +1439,31 @@ window.storytellerClampDictionary();
             // both the scroll shift and any body padding added near a resource boundary.
             // Skip it if the reader has moved since, so a user scroll is never undone.
             activity?.lifecycleScope?.launch {
-                navigator?.evaluateJavascript(
-                    """
+                val undo = """
                     (function () {
+                      var body = document.body;
+                      // The marker travels with the element, so it is found even when the
+                      // page that received the padding is no longer the navigator's current
+                      // WebView. Several page WebViews stay alive during a chapter turn.
+                      if (body && body.getAttribute('data-storyteller-jump-pad') !== null) {
+                        var original = parseFloat(body.getAttribute('data-storyteller-jump-pad')) || 0;
+                        body.removeAttribute('data-storyteller-jump-pad');
+                        body.style.setProperty('padding-top', original + 'px', 'important');
+                      }
                       var guard = globalThis.__storytellerJumpGuard;
                       if (!guard || guard.input) return;
-                      var pad = guard.appliedPadding || 0;
                       var shift = guard.appliedShift || 0;
-                      if (pad <= 0 && shift <= 0) return;
-                      guard.appliedPadding = 0;
+                      if (shift <= 0) return;
                       guard.appliedShift = 0;
                       var scroller = document.scrollingElement || document.documentElement;
-                      var body = document.body;
-                      if (pad > 0 && body) {
-                        var current = parseFloat(getComputedStyle(body).paddingTop) || 0;
-                        body.style.setProperty('padding-top', Math.max(0, current - pad) + 'px', 'important');
-                      }
-                      if (shift > 0 && scroller && scroller.scrollTop === guard.appliedTop) {
+                      if (scroller && scroller.scrollTop === guard.appliedTop) {
                         var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
                         scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
                       }
                     })();
-                    """.trimIndent()
-                )
+                """.trimIndent()
+                webViews.forEach { it.evaluateJavascript(undo, null) }
+                navigator?.evaluateJavascript(undo)
             }
         }
         // Changing the overlay alone must not run navigation or playback follow.
