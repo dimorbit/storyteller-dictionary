@@ -633,7 +633,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           // blank strip above the text. Scroll mode top-aligns a bookmarked quote,
           // so there the target needs clearance while the bar is on screen.
           jumpBarBottom={
-            preferences?.scrollMode && returnPosition && preferences?.showReaderUi
+            preferences?.layout.scroll && returnPosition && preferences?.showReaderUi
               ? returnBarBottom
               : 0
           }
