@@ -425,8 +425,10 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
   const isJumpHeld = jumpHold?.bookUuid === book.uuid
 
   const floatingToolbar = preferences?.floatingToolbar
-  // Top padding of the reading area; the rail's return bar pins to it too.
-  const pageTopPadding = floatingToolbar ? insets.top : 24
+  // The unmodified reader has no extra top padding when the toolbar is in flow;
+  // adding one here leaves a blank strip above the text. Only the floating
+  // toolbar needs padding, to clear the status bar.
+  const pageTopPadding = floatingToolbar ? insets.top : 0
   const readerTop = pageTopPadding + (rail || floatingToolbar ? 0 : toolbarHeight)
   const returnBarTop = rail ? pageTopPadding : toolbarHeight
   // Everything above the page's WebView: the reader's top padding, plus the
