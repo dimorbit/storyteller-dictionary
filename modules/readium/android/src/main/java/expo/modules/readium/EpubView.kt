@@ -1451,20 +1451,32 @@ window.storytellerClampDictionary();
                 val undo = """
                     (function () {
                       var body = document.body;
+                      var pad = 0;
                       // The marker travels with the element, so it is found even when the
                       // page that received the padding is no longer the navigator's current
                       // WebView. Several page WebViews stay alive during a chapter turn.
                       if (body && body.getAttribute('data-storyteller-jump-pad') !== null) {
                         var original = parseFloat(body.getAttribute('data-storyteller-jump-pad')) || 0;
+                        var current = parseFloat(getComputedStyle(body).paddingTop) || 0;
+                        pad = Math.max(0, current - original);
                         body.removeAttribute('data-storyteller-jump-pad');
                         body.style.setProperty('padding-top', original + 'px', 'important');
                       }
                       var guard = globalThis.__storytellerJumpGuard;
-                      if (!guard || guard.input) return;
+                      var scroller = document.scrollingElement || document.documentElement;
+                      if (guard && guard.input) {
+                        // The reader moved after the jump. Removing the padding pulls the
+                        // text up; scroll down by the same amount to keep the user's place.
+                        if (pad > 0 && scroller) {
+                          var maxIn = Math.max(0, scroller.scrollHeight - window.innerHeight);
+                          scroller.scrollTop = Math.min(maxIn, scroller.scrollTop + pad);
+                        }
+                        return;
+                      }
+                      if (!guard) return;
                       var shift = guard.appliedShift || 0;
                       if (shift <= 0) return;
                       guard.appliedShift = 0;
-                      var scroller = document.scrollingElement || document.documentElement;
                       if (scroller && scroller.scrollTop === guard.appliedTop) {
                         var max = Math.max(0, scroller.scrollHeight - window.innerHeight);
                         scroller.scrollTop = Math.min(max, scroller.scrollTop + shift);
