@@ -634,7 +634,7 @@ export function Epub({ book, format, locator, isReaderSheetOpen }: Props) {
           // so there the target needs clearance while the bar is on screen.
           jumpBarBottom={
             preferences?.scrollMode && returnPosition && preferences?.showReaderUi
-              ? navigationReturnHeight
+              ? returnBarBottom
               : 0
           }
           highlights={highlights ?? []}

@@ -818,10 +818,9 @@ window.storytellerClampDictionary();
 
     /** Refresh the WebView set from the live view tree before a turn picks a target. */
     private fun collectPageWebViews(view: android.view.View) {
-        if (view is WebView) webViews.add(view)
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) collectPageWebViews(view.getChildAt(i))
-        }
+        // Reuse disableOverscroll: it adds the WebView to the set AND installs the
+        // selection scroll-pin. Adding it here alone made that setup get skipped.
+        disableOverscroll(view)
     }
 
     fun turnPageForward(animated: Boolean = true) {
